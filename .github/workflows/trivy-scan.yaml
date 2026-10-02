@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/github-workflow.json
+# See https://github.com/anthony-spruyt/repo-operator/blob/main/src/templates/.github/workflows/trivy-scan.yaml for template comments
+
+name: "Trivy Daily Scan"
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: "read"
+  security-events: "write"
+  packages: "read"
+jobs:
+  scan-fs:
+    uses: "anthony-spruyt/repo-operator/.github/workflows/_trivy-fs.yaml@main"
+  scan-image:
+    uses: "anthony-spruyt/repo-operator/.github/workflows/_trivy-img.yaml@main"
+    secrets:
+      GHCR_READ_TOKEN: "${{ secrets.GHCR_READ_TOKEN }}"
