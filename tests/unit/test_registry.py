@@ -1,21 +1,15 @@
 import importlib
-import os
 import sys
 import types
 
 import pytest
 
 
-_HERE = os.path.dirname(__file__)
-_PLUGIN_DIR = os.path.dirname(_HERE)
-if _PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, _PLUGIN_DIR)
-
 
 @pytest.fixture
 def registry_module():
-    sys.modules.pop("registry", None)
-    return importlib.import_module("registry")
+    sys.modules.pop("litellm_middleware.registry", None)
+    return importlib.import_module("litellm_middleware.registry")
 
 
 class Logger:
@@ -64,8 +58,8 @@ def test_default_specs_point_at_per_middleware_packages(registry_module):
     modules = {s.name: s.module for s in registry_module.DEFAULT_MIDDLEWARE_SPECS}
 
     assert modules == {
-        "secret-masking": "custom_callbacks.middleware.secret_masking.secret_masking",
-        "ratelimit-headers": "custom_callbacks.middleware.ratelimit_headers.ratelimit_headers",
+        "secret-masking": "litellm_middleware.secret_masking.secret_masking",
+        "ratelimit-headers": "litellm_middleware.ratelimit_headers.ratelimit_headers",
     }
 
 

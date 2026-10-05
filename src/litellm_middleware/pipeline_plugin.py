@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from litellm._logging import verbose_proxy_logger
 
-from custom_callbacks.middleware.pipeline import MiddlewarePipeline
-from custom_callbacks.middleware.registry import load_default_middlewares
+from litellm_middleware.pipeline import MiddlewarePipeline
+from litellm_middleware.registry import load_default_middlewares
 
 
 pipeline_middleware = MiddlewarePipeline(

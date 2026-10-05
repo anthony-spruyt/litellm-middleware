@@ -1,25 +1,16 @@
 import importlib
-import os
 import sys
 import types
 
 import pytest
 
 
-_HERE = os.path.dirname(__file__)
-_PLUGIN_DIR = os.path.dirname(_HERE)
-if _PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, _PLUGIN_DIR)
-
-
 @pytest.fixture
-def fake_custom_callbacks(monkeypatch):
+def fake_pipeline_and_registry(monkeypatch):
     litellm = types.ModuleType("litellm")
     logging = types.ModuleType("litellm._logging")
-    custom_callbacks = types.ModuleType("custom_callbacks")
-    middleware_pkg = types.ModuleType("custom_callbacks.middleware")
-    pipeline_mod = types.ModuleType("custom_callbacks.middleware.pipeline")
-    registry_mod = types.ModuleType("custom_callbacks.middleware.registry")
+    pipeline_mod = types.ModuleType("litellm_middleware.pipeline")
+    registry_mod = types.ModuleType("litellm_middleware.registry")
 
     class Logger:
         def warning(self, *args, **kwargs):
@@ -36,17 +27,15 @@ def fake_custom_callbacks(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "litellm", litellm)
     monkeypatch.setitem(sys.modules, "litellm._logging", logging)
-    monkeypatch.setitem(sys.modules, "custom_callbacks", custom_callbacks)
-    monkeypatch.setitem(sys.modules, "custom_callbacks.middleware", middleware_pkg)
-    monkeypatch.setitem(sys.modules, "custom_callbacks.middleware.pipeline", pipeline_mod)
-    monkeypatch.setitem(sys.modules, "custom_callbacks.middleware.registry", registry_mod)
+    monkeypatch.setitem(sys.modules, "litellm_middleware.pipeline", pipeline_mod)
+    monkeypatch.setitem(sys.modules, "litellm_middleware.registry", registry_mod)
 
     return sentinel_middlewares
 
 
-def test_pipeline_plugin_exposes_configured_pipeline(fake_custom_callbacks):
-    sys.modules.pop("pipeline_plugin", None)
+def test_pipeline_plugin_exposes_configured_pipeline(fake_pipeline_and_registry):
+    sys.modules.pop("litellm_middleware.pipeline_plugin", None)
 
-    plugin = importlib.import_module("pipeline_plugin")
+    plugin = importlib.import_module("litellm_middleware.pipeline_plugin")
 
-    assert plugin.pipeline_middleware.middlewares is fake_custom_callbacks
+    assert plugin.pipeline_middleware.middlewares is fake_pipeline_and_registry

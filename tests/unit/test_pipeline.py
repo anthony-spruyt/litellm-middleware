@@ -1,16 +1,10 @@
 import importlib
 import inspect
-import os
 import sys
 import types
 
 import pytest
 
-
-_HERE = os.path.dirname(__file__)
-_PLUGIN_DIR = os.path.dirname(_HERE)
-if _PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, _PLUGIN_DIR)
 
 
 @pytest.fixture(autouse=True)
@@ -41,8 +35,8 @@ def fake_litellm(monkeypatch):
 
 @pytest.fixture
 def pipeline_module():
-    sys.modules.pop("pipeline", None)
-    return importlib.import_module("pipeline")
+    sys.modules.pop("litellm_middleware.pipeline", None)
+    return importlib.import_module("litellm_middleware.pipeline")
 
 
 class AddSystemMiddleware:

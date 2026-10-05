@@ -1,17 +1,11 @@
 import asyncio
 import importlib
 import json
-import os
 import sys
 import types
 
 import pytest
 
-
-_HERE = os.path.dirname(__file__)
-_PLUGINS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
-if _PLUGINS_DIR not in sys.path:
-    sys.path.insert(0, _PLUGINS_DIR)
 
 
 # Built by concatenation so secret scanners don't flag the fixtures.
@@ -45,17 +39,17 @@ def fake_litellm(monkeypatch):
 @pytest.fixture
 def sf():
     for name in (
-        "middleware.secret_masking.shared_fakes",
-        "middleware.secret_masking.secret_masking",
-        "middleware.pipeline",
+        "litellm_middleware.secret_masking.shared_fakes",
+        "litellm_middleware.secret_masking.secret_masking",
+        "litellm_middleware.pipeline",
     ):
         sys.modules.pop(name, None)
-    return importlib.import_module("middleware.secret_masking.shared_fakes")
+    return importlib.import_module("litellm_middleware.secret_masking.shared_fakes")
 
 
 @pytest.fixture
 def sm(sf):
-    return importlib.import_module("middleware.secret_masking.secret_masking")
+    return importlib.import_module("litellm_middleware.secret_masking.secret_masking")
 
 
 class FakeValkey:
