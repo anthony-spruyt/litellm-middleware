@@ -1,4 +1,4 @@
-"""Boots the pinned LiteLLM image with the middleware mounted exactly as the pod mounts it."""
+"""Boots the pinned LiteLLM image with the package image's files mounted where the pod mounts them."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 import shlex
 import socket
 import subprocess
-import sys
+import tarfile
 import time
 import uuid
 from pathlib import Path
@@ -15,9 +15,10 @@ import httpx
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).parent))
-import pod_layout  # noqa: E402
-
+HERE = Path(__file__).parent
+REPO_ROOT = HERE.parents[1]
+MOUNT_PATH = "/opt/litellm-middleware"
+CALLBACK = "litellm_middleware.pipeline_plugin.pipeline_middleware"
 MASTER_KEY = "it-master-key"
 MODEL = "claude-it"
 STARTUP_TIMEOUT_S = 240
@@ -41,35 +42,54 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _config(layout: pod_layout.PodLayout) -> str:
+def litellm_image() -> str:
+    return yaml.safe_load((HERE / "litellm.yaml").read_text())["image"]
+
+
+def export_package_image(dest: Path) -> None:
+    """Builds the release Dockerfile and unpacks its filesystem, so tests see exactly what the image ships."""
+    archive = dest.with_suffix(".tar")
+    build = subprocess.run([_cli(), "build", "--output", f"type=tar,dest={archive}", str(REPO_ROOT)],
+                           capture_output=True, text=True, check=False)
+    assert build.returncode == 0, build.stdout + build.stderr
+    with tarfile.open(archive) as tar:
+        tar.extractall(dest, filter="data")
+
+
+def _world_readable(root: Path) -> None:
+    # The container runs as a remapped non-root uid, so host file ownership doesn't carry over.
+    for path in [root, *root.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def _config() -> str:
     return yaml.safe_dump({
         "model_list": [{
             "model_name": MODEL,
             "litellm_params": {"model": f"anthropic/{MODEL}", "api_base": "http://127.0.0.1:8099", "api_key": "it"},
         }],
-        "litellm_settings": {"callbacks": list(layout.callbacks)},
-        "general_settings": {**layout.general_settings, "master_key": MASTER_KEY},
+        "litellm_settings": {"callbacks": [CALLBACK]},
+        "general_settings": {"include_call_id_in_error_body": True, "master_key": MASTER_KEY},
         # Down at startup so the proxy's tool mapping stays cold, like a DB-loaded server after a restart.
         "mcp_servers": {MCP_SERVER: {"url": f"http://127.0.0.1:{MCP_PORT}/mcp", "transport": "http"}},
     })
 
 
 @pytest.fixture(scope="session")
-def layout() -> pod_layout.PodLayout:
-    return pod_layout.load()
+def package_files(tmp_path_factory) -> Path:
+    dest = tmp_path_factory.mktemp("package-image")
+    export_package_image(dest)
+    _world_readable(dest)
+    return dest
 
 
 @pytest.fixture(scope="session")
-def proxy(layout, tmp_path_factory):
+def proxy(package_files, tmp_path_factory):
     work = tmp_path_factory.mktemp("litellm-it")
-    callbacks_dir = work / "custom_callbacks"
-    callbacks_dir.mkdir()
-    pod_layout.stage(layout, callbacks_dir)
-    (work / "config.yaml").write_text(_config(layout))
+    (work / "config.yaml").write_text(_config())
     for fake in ("fake_upstream.py", "fake_mcp.py"):
-        (work / fake).write_bytes((Path(__file__).parent / fake).read_bytes())
-    for path in [work, *work.rglob("*")]:
-        path.chmod(0o755 if path.is_dir() else 0o644)
+        (work / fake).write_bytes((HERE / fake).read_bytes())
+    _world_readable(work)
 
     name = f"litellm-it-{uuid.uuid4().hex[:8]}"
     port = _free_port()
@@ -80,13 +100,13 @@ def proxy(layout, tmp_path_factory):
             *_runner(), "--name", name,
             # Same port both sides: WSL devcontainer podman runs host-network and ignores the mapping.
             "-p", f"127.0.0.1:{port}:{port}",
-            "-e", f"PYTHONPATH={layout.pythonpath}",
-            "-v", f"{callbacks_dir}:{pod_layout.CALLBACKS_ROOT}:ro",
+            "-e", f"PYTHONPATH={MOUNT_PATH}",
+            "-v", f"{package_files}:{MOUNT_PATH}:ro",
             "-v", f"{work / 'config.yaml'}:/app/config.yaml:ro",
             "-v", f"{work / 'fake_upstream.py'}:/it/fake_upstream.py:ro",
             "-v", f"{work / 'fake_mcp.py'}:/it/fake_mcp.py:ro",
             "--entrypoint", "sh",
-            layout.image,
+            litellm_image(),
             "-c", f"python /it/fake_upstream.py & exec litellm --config /app/config.yaml --port {port}",
         ], stdout=log, stderr=subprocess.STDOUT)
 

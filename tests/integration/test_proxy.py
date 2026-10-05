@@ -66,7 +66,7 @@ def test_chat_completions_masks_upstream_and_restores_reply(proxy):
 _COUNT_TOKENS = """
 import asyncio, json, sys
 import litellm.proxy.proxy_server as ps
-import custom_callbacks.middleware.pipeline_plugin
+import litellm_middleware.pipeline_plugin
 
 seen = {}
 
