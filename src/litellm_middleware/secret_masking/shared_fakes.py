@@ -9,10 +9,10 @@ import json
 import os
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from ..pipeline import MiddlewarePipeline
-
 
 _log_warning = MiddlewarePipeline._log_warning
 _KEY_PREFIX = "litellm:secret-masking:v1:"
@@ -50,12 +50,12 @@ class SharedFakes:
         self._down_until = 0.0
         self._cache_size = cache_size
         self._pending: dict[str, dict[str, tuple[str, str]]] = {}
-        self._flushing: Optional[asyncio.Task] = None
+        self._flushing: asyncio.Task | None = None
         self._inflight: dict[str, asyncio.Task] = {}
         self._written: OrderedDict[tuple[str, str], float] = OrderedDict()
         self._opened: OrderedDict[tuple[str, bytes, bytes], tuple[str, str]] = OrderedDict()
 
-    def put(self, scope: Optional[str], fakes: dict[str, str]) -> None:
+    def put(self, scope: str | None, fakes: dict[str, str]) -> None:
         """Queues fakes for a background write; never touches Valkey on the caller's path."""
         if scope is None or not fakes or self._down():
             return
@@ -73,7 +73,7 @@ class SharedFakes:
         except RuntimeError:
             self._pending.clear()
 
-    def fetch(self, scope: Optional[str]) -> Optional[asyncio.Task]:
+    def fetch(self, scope: str | None) -> asyncio.Task | None:
         """Starts reading a scope's shared fakes in the background; concurrent callers share one read."""
         if scope is None or self._down():
             return None
@@ -158,7 +158,7 @@ class SharedFakes:
         plain = json.dumps([fake, real]).encode()
         return _FORMAT + nonce + self._aead.encrypt(nonce, plain, _aad(key, field.encode()))
 
-    def _open(self, key: str, field: Any, value: Any) -> Optional[tuple[str, str]]:
+    def _open(self, key: str, field: Any, value: Any) -> tuple[str, str] | None:
         if not isinstance(field, bytes) or not isinstance(value, bytes) or value[:1] != _FORMAT:
             return None
         cache_key = (key, field, value)
@@ -195,7 +195,7 @@ def _aad(key: str, field: bytes) -> bytes:
     return key.encode() + b"\0" + field
 
 
-def shared_from_env() -> Optional[SharedFakes]:
+def shared_from_env() -> SharedFakes | None:
     salt = os.environ.get("LITELLM_SALT_KEY")
     host = os.environ.get("REDIS_HOST")
     if not salt or not host:

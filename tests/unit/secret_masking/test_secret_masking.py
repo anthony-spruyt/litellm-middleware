@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 # Built by concatenation so secret scanners don't flag the fixtures.
 GH_PAT = "gh" + "p_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5"
 GH_PAT_2 = "gh" + "p_" + "Zy8xW6vU4tS2rQ0pO8nM6lK4jI2hG0fE8dC6"

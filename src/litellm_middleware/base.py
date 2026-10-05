@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, Union
+from typing import Any, Protocol
 
-
-PreCallResult = Optional[Union[Exception, dict, str]]
+PreCallResult = Exception | dict | str | None
 
 
 class ProxyMiddleware(Protocol):

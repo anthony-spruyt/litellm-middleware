@@ -3,7 +3,6 @@ import secrets
 import string
 
 import pytest
-
 from conftest import MASTER_KEY, MCP_SERVER, MODEL
 
 

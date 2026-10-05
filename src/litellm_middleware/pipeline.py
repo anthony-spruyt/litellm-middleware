@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -200,11 +201,11 @@ class _TrackedStream:
 
     def __init__(self, upstream: Any) -> None:
         self._it = upstream.__aiter__()
-        self.pulled: Optional[list] = []
+        self.pulled: list | None = []
         self.failed = False
         self.done = False
 
-    def __aiter__(self) -> "_TrackedStream":
+    def __aiter__(self) -> _TrackedStream:
         return self
 
     async def __anext__(self) -> Any:

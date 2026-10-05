@@ -1,11 +1,9 @@
 import asyncio
 import importlib
-import json
 import sys
 import types
 
 import pytest
-
 
 # Built by concatenation so secret scanners don't flag the fixtures.
 GH_PAT = "gh" + "p_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5"
@@ -73,7 +71,7 @@ class FakeValkey:
         assert (ex, fields) == ("EX", "FIELDS")
         assert count == len(pairs) // 2
         entries = self.data.setdefault(key, {})
-        for field, value in zip(pairs[::2], pairs[1::2]):
+        for field, value in zip(pairs[::2], pairs[1::2], strict=True):
             entries[field.encode()] = (value, self.now + ttl)
         return 1
 

@@ -150,7 +150,7 @@ def proxy(package_files, tmp_path_factory):
             proc.kill()
 
 
-def _wait_ready(proxy: "Proxy", proc: subprocess.Popen) -> None:
+def _wait_ready(proxy: Proxy, proc: subprocess.Popen) -> None:
     deadline = time.monotonic() + STARTUP_TIMEOUT_S
     while time.monotonic() < deadline:
         try:
