@@ -49,8 +49,12 @@ def litellm_image() -> str:
 def export_package_image(dest: Path) -> None:
     """Builds the release Dockerfile and unpacks its filesystem, so tests see exactly what the image ships."""
     archive = dest.with_suffix(".tar")
-    build = subprocess.run([_cli(), "build", "--output", f"type=tar,dest={archive}", str(REPO_ROOT)],
-                           capture_output=True, text=True, check=False)
+    build = subprocess.run(
+        [_cli(), "build", "--output", f"type=tar,dest={archive}", str(REPO_ROOT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert build.returncode == 0, build.stdout + build.stderr
     with tarfile.open(archive) as tar:
         tar.extractall(dest, filter="data")
@@ -63,16 +67,24 @@ def _world_readable(root: Path) -> None:
 
 
 def _config() -> str:
-    return yaml.safe_dump({
-        "model_list": [{
-            "model_name": MODEL,
-            "litellm_params": {"model": f"anthropic/{MODEL}", "api_base": "http://127.0.0.1:8099", "api_key": "it"},
-        }],
-        "litellm_settings": {"callbacks": [CALLBACK]},
-        "general_settings": {"include_call_id_in_error_body": True, "master_key": MASTER_KEY},
-        # Down at startup so the proxy's tool mapping stays cold, like a DB-loaded server after a restart.
-        "mcp_servers": {MCP_SERVER: {"url": f"http://127.0.0.1:{MCP_PORT}/mcp", "transport": "http"}},
-    })
+    return yaml.safe_dump(
+        {
+            "model_list": [
+                {
+                    "model_name": MODEL,
+                    "litellm_params": {
+                        "model": f"anthropic/{MODEL}",
+                        "api_base": "http://127.0.0.1:8099",
+                        "api_key": "it",
+                    },
+                }
+            ],
+            "litellm_settings": {"callbacks": [CALLBACK]},
+            "general_settings": {"include_call_id_in_error_body": True, "master_key": MASTER_KEY},
+            # Down at startup so the proxy's tool mapping stays cold, like a DB-loaded server after a restart.
+            "mcp_servers": {MCP_SERVER: {"url": f"http://127.0.0.1:{MCP_PORT}/mcp", "transport": "http"}},
+        }
+    )
 
 
 @pytest.fixture(scope="session")
@@ -96,19 +108,33 @@ def proxy(package_files, tmp_path_factory):
     log_path = work / "proxy.log"
     # Foreground, not -d: --rm deletes a crashed container and its logs, so capture output ourselves.
     with log_path.open("w") as log:
-        proc = subprocess.Popen([
-            *_runner(), "--name", name,
-            # Same port both sides: WSL devcontainer podman runs host-network and ignores the mapping.
-            "-p", f"127.0.0.1:{port}:{port}",
-            "-e", f"PYTHONPATH={MOUNT_PATH}",
-            "-v", f"{package_files}:{MOUNT_PATH}:ro",
-            "-v", f"{work / 'config.yaml'}:/app/config.yaml:ro",
-            "-v", f"{work / 'fake_upstream.py'}:/it/fake_upstream.py:ro",
-            "-v", f"{work / 'fake_mcp.py'}:/it/fake_mcp.py:ro",
-            "--entrypoint", "sh",
-            litellm_image(),
-            "-c", f"python /it/fake_upstream.py & exec litellm --config /app/config.yaml --port {port}",
-        ], stdout=log, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(
+            [
+                *_runner(),
+                "--name",
+                name,
+                # Same port both sides: WSL devcontainer podman runs host-network and ignores the mapping.
+                "-p",
+                f"127.0.0.1:{port}:{port}",
+                "-e",
+                f"PYTHONPATH={MOUNT_PATH}",
+                "-v",
+                f"{package_files}:{MOUNT_PATH}:ro",
+                "-v",
+                f"{work / 'config.yaml'}:/app/config.yaml:ro",
+                "-v",
+                f"{work / 'fake_upstream.py'}:/it/fake_upstream.py:ro",
+                "-v",
+                f"{work / 'fake_mcp.py'}:/it/fake_mcp.py:ro",
+                "--entrypoint",
+                "sh",
+                litellm_image(),
+                "-c",
+                f"python /it/fake_upstream.py & exec litellm --config /app/config.yaml --port {port}",
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
 
     proxy = Proxy(f"http://127.0.0.1:{port}", name, log_path)
     try:
@@ -143,8 +169,7 @@ class Proxy:
         self.base = base
         self.name = name
         self.log_path = log_path
-        self.client = httpx.Client(base_url=base, timeout=60,
-                                   headers={"authorization": f"Bearer {MASTER_KEY}"})
+        self.client = httpx.Client(base_url=base, timeout=60, headers={"authorization": f"Bearer {MASTER_KEY}"})
 
     def logs(self) -> str:
         return self.log_path.read_text()
@@ -165,5 +190,8 @@ class Proxy:
 
     def upstream_received(self) -> list[dict]:
         # The fake upstream only listens inside the container.
-        return yaml.safe_load(self.python(
-            "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8099/_received').read().decode())"))
+        return yaml.safe_load(
+            self.python(
+                "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8099/_received').read().decode())"
+            )
+        )

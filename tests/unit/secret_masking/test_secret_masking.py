@@ -9,11 +9,19 @@ from types import SimpleNamespace
 import pytest
 
 
-
 # Built by concatenation so secret scanners don't flag the fixtures.
 GH_PAT = "gh" + "p_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5"
 GH_PAT_2 = "gh" + "p_" + "Zy8xW6vU4tS2rQ0pO8nM6lK4jI2hG0fE8dC6"
-GH_APP_TOKEN = "gh" + "s_" + "1234567_" + "eyJhbGciOiJSUzI1NiJ9" + "." + "eyJpc3MiOiIxMjM0NTY3In0" + "." + "aB3dE5gH7jK9-mN1pQ3sT5_vW7yZ9bC1"
+GH_APP_TOKEN = (
+    "gh"
+    + "s_"
+    + "1234567_"
+    + "eyJhbGciOiJSUzI1NiJ9"
+    + "."
+    + "eyJpc3MiOiIxMjM0NTY3In0"
+    + "."
+    + "aB3dE5gH7jK9-mN1pQ3sT5_vW7yZ9bC1"
+)
 GH_APP_TOKEN_LEGACY = "gh" + "s_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5"
 OAUTH = "sk-" + "ant-oat01-" + "Qw3rTy7uIo9pAs1dFg5hJk7lZx9cVb3nM1qW5eR7tY9uI1oP3aS5dF7gH9jK1lZ3"
 GOOGLE = "AI" + "za" + "SyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"
@@ -74,11 +82,7 @@ async def _mask(mw, text, call_id="call-1"):
 
 
 def _classes(s):
-    return [
-        "d" if c.isdigit() else "l" if c.islower() else "u" if c.isupper() else c
-        for c in s
-    ]
-
+    return ["d" if c.isdigit() else "l" if c.islower() else "u" if c.isupper() else c for c in s]
 
 
 async def test_masks_github_pat_with_same_shape_fake(mw):
@@ -269,14 +273,18 @@ async def test_masks_system_prompt_and_nested_tool_results(mw):
     data = {
         "litellm_call_id": "call-1",
         "system": [{"type": "text", "text": f"env: {GH_PAT}"}],
-        "messages": [{
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": "t1",
-                "content": [{"type": "text", "text": f"GOOGLE_KEY={GOOGLE}"}],
-            }],
-        }],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [{"type": "text", "text": f"GOOGLE_KEY={GOOGLE}"}],
+                    }
+                ],
+            }
+        ],
     }
 
     out = await mw.async_pre_call_hook(None, None, data, "anthropic_messages")
@@ -291,10 +299,16 @@ async def test_masks_chat_completions_messages(mw):
         "litellm_call_id": "call-1",
         "messages": [
             {"role": "user", "content": f"key {GH_PAT}"},
-            {"role": "assistant", "tool_calls": [{
-                "id": "c1", "type": "function",
-                "function": {"name": "sh", "arguments": json.dumps({"cmd": PEM})},
-            }]},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "sh", "arguments": json.dumps({"cmd": PEM})},
+                    }
+                ],
+            },
         ],
     }
 
@@ -326,16 +340,25 @@ async def test_masks_responses_input_and_instructions(mw, call_type):
 
 async def test_does_not_touch_responses_media_urls_or_reasoning(mw):
     image = {"type": "input_image", "image_url": "https://x.test/a.png?sig=" + GH_PAT, "detail": "auto"}
-    file_ = {"type": "input_file", "file_url": "https://x.test/a.pdf?sig=" + GH_PAT,
-             "file_data": "https://x.test/b.pdf?sig=" + GH_PAT}
-    reasoning = {"type": "reasoning", "summary": [{"type": "summary_text", "text": GH_PAT}],
-                 "encrypted_content": "gAAAA/" + GOOGLE}
+    file_ = {
+        "type": "input_file",
+        "file_url": "https://x.test/a.pdf?sig=" + GH_PAT,
+        "file_data": "https://x.test/b.pdf?sig=" + GH_PAT,
+    }
+    reasoning = {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": GH_PAT}],
+        "encrypted_content": "gAAAA/" + GOOGLE,
+    }
     data = {
         "litellm_call_id": "call-1",
         "input": [
             copy.deepcopy(reasoning),
-            {"type": "message", "role": "user",
-             "content": [copy.deepcopy(image), copy.deepcopy(file_), {"type": "input_text", "text": GH_PAT}]},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [copy.deepcopy(image), copy.deepcopy(file_), {"type": "input_text", "text": GH_PAT}],
+            },
         ],
     }
 
@@ -392,7 +415,6 @@ async def test_original_request_objects_are_not_mutated(mw):
     assert messages == snapshot
 
 
-
 async def test_restores_anthropic_response_text_and_tool_input(mw):
     data = await _mask(mw, f"use {GH_PAT}")
     fake = _user_text(data).split()[1]
@@ -420,8 +442,7 @@ async def test_restores_chat_response_object(mw):
     fake = _user_text(data).split()[1]
     message = SimpleNamespace(
         content=f"ok {fake}",
-        tool_calls=[SimpleNamespace(function=SimpleNamespace(
-            name="sh", arguments=json.dumps({"cmd": fake})))],
+        tool_calls=[SimpleNamespace(function=SimpleNamespace(name="sh", arguments=json.dumps({"cmd": fake})))],
     )
     response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
@@ -446,10 +467,14 @@ async def test_restores_text_completion_response(mw):
 def _responses_output(fake):
     return [
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": fake}]},
-        SimpleNamespace(type="message", role="assistant", content=[
-            SimpleNamespace(type="output_text", text=f"ok {fake}", annotations=[]),
-            {"type": "refusal", "refusal": f"no {fake}"},
-        ]),
+        SimpleNamespace(
+            type="message",
+            role="assistant",
+            content=[
+                SimpleNamespace(type="output_text", text=f"ok {fake}", annotations=[]),
+                {"type": "refusal", "refusal": f"no {fake}"},
+            ],
+        ),
         SimpleNamespace(type="function_call", call_id="c1", name="sh", arguments=json.dumps({"cmd": fake})),
         {"type": "custom_tool_call", "call_id": "c2", "name": "patch", "input": f"echo {fake}"},
     ]
@@ -476,7 +501,8 @@ async def test_restores_responses_api_response_with_non_string_part_type(mw):
     output = [{"type": "message", "content": [{"type": ["x"]}, {"type": "output_text", "text": fake}]}]
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response=SimpleNamespace(id="r", output=output))
+        data=data, user_api_key_dict=None, response=SimpleNamespace(id="r", output=output)
+    )
 
     assert out.output[0]["content"][1]["text"] == GH_PAT
 
@@ -514,10 +540,10 @@ async def test_response_without_mapping_is_returned_as_is(mw):
     response = {"content": [{"type": "text", "text": "hi"}]}
 
     out = await mw.async_post_call_success_hook(
-        data={"litellm_call_id": "unknown"}, user_api_key_dict=None, response=response)
+        data={"litellm_call_id": "unknown"}, user_api_key_dict=None, response=response
+    )
 
     assert out is None or out is response
-
 
 
 def _sse(event):
@@ -525,13 +551,14 @@ def _sse(event):
 
 
 def _text_stream_events(pieces, index=0):
-    events = [{"type": "message_start", "message": {"id": "m1"}},
-              {"type": "content_block_start", "index": index,
-               "content_block": {"type": "text", "text": ""}}]
-    events += [{"type": "content_block_delta", "index": index,
-                "delta": {"type": "text_delta", "text": p}} for p in pieces]
-    events += [{"type": "content_block_stop", "index": index},
-               {"type": "message_stop"}]
+    events = [
+        {"type": "message_start", "message": {"id": "m1"}},
+        {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+    ]
+    events += [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": p}} for p in pieces
+    ]
+    events += [{"type": "content_block_stop", "index": index}, {"type": "message_stop"}]
     return events
 
 
@@ -546,8 +573,12 @@ async def _drain(stream):
 
 
 async def _collect(mw, chunks, data):
-    return [c async for c in mw.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=None, response=_agen(chunks), request_data=data)]
+    return [
+        c
+        async for c in mw.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=None, response=_agen(chunks), request_data=data
+        )
+    ]
 
 
 def _parse_sse(chunks):
@@ -565,7 +596,7 @@ def _joined(events, field="text"):
 
 
 def _split(s, size):
-    return [s[i:i + size] for i in range(0, len(s), size)]
+    return [s[i : i + size] for i in range(0, len(s), size)]
 
 
 async def test_stream_restores_fake_split_across_deltas_and_byte_chunks(mw):
@@ -590,10 +621,15 @@ async def test_stream_restores_tool_input_json_deltas(mw):
     fake = _user_text(data)
     partial = json.dumps({"cmd": f"echo {fake}"})
     events = [
-        {"type": "content_block_start", "index": 1,
-         "content_block": {"type": "tool_use", "id": "t1", "name": "sh", "input": {}}},
-        *[{"type": "content_block_delta", "index": 1,
-           "delta": {"type": "input_json_delta", "partial_json": p}} for p in _split(partial, 5)],
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "sh", "input": {}},
+        },
+        *[
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": p}}
+            for p in _split(partial, 5)
+        ],
         {"type": "content_block_stop", "index": 1},
     ]
 
@@ -675,9 +711,7 @@ async def test_stream_restores_chat_tool_call_arguments(mw):
 
     out = await _collect(mw, chunks, data)
 
-    args = "".join(
-        tc.function.arguments
-        for c in out for tc in (c.choices[0].delta.tool_calls or []))
+    args = "".join(tc.function.arguments for c in out for tc in (c.choices[0].delta.tool_calls or []))
     assert json.loads(args) == {"cmd": GH_PAT}
 
 
@@ -712,15 +746,23 @@ def _resp_event(kind, **fields):
 
 def _resp_text_events(fake, text):
     pieces = _split(text, 4)
-    message = SimpleNamespace(type="message", role="assistant", content=[
-        SimpleNamespace(type="output_text", text=text, annotations=[])])
+    message = SimpleNamespace(
+        type="message", role="assistant", content=[SimpleNamespace(type="output_text", text=text, annotations=[])]
+    )
     return [
         _resp_event("response.created", response=SimpleNamespace(id="r1", output=[])),
-        *[_resp_event("response.output_text.delta", item_id="m1", output_index=0, content_index=0, delta=p)
-          for p in pieces],
+        *[
+            _resp_event("response.output_text.delta", item_id="m1", output_index=0, content_index=0, delta=p)
+            for p in pieces
+        ],
         _resp_event("response.output_text.done", item_id="m1", output_index=0, content_index=0, text=text),
-        _resp_event("response.content_part.done", item_id="m1", output_index=0, content_index=0,
-                    part=SimpleNamespace(type="output_text", text=text, annotations=[])),
+        _resp_event(
+            "response.content_part.done",
+            item_id="m1",
+            output_index=0,
+            content_index=0,
+            part=SimpleNamespace(type="output_text", text=text, annotations=[]),
+        ),
         _resp_event("response.output_item.done", output_index=0, item=message),
         _resp_event("response.completed", response=SimpleNamespace(id="r1", output=[copy.deepcopy(message)])),
     ]
@@ -757,8 +799,10 @@ async def test_stream_restores_responses_function_call_arguments(mw):
     fake = _user_text(data)
     args = json.dumps({"cmd": fake})
     events = [
-        *[_resp_event("response.function_call_arguments.delta", item_id="f1", output_index=1, delta=p)
-          for p in _split(args, 5)],
+        *[
+            _resp_event("response.function_call_arguments.delta", item_id="f1", output_index=1, delta=p)
+            for p in _split(args, 5)
+        ],
         _resp_event("response.function_call_arguments.done", item_id="f1", output_index=1, arguments=args),
     ]
 
@@ -772,10 +816,13 @@ async def test_stream_restores_responses_sse_bytes(mw):
     data = await _mask(mw, GH_PAT)
     fake = _user_text(data)
     text = f"key {fake} then gh"
-    events = [{"type": "response.output_text.delta", "item_id": "m1", "output_index": 0,
-               "content_index": 0, "delta": p} for p in _split(text, 3)]
-    events.append({"type": "response.output_text.done", "item_id": "m1", "output_index": 0,
-                   "content_index": 0, "text": text})
+    events = [
+        {"type": "response.output_text.delta", "item_id": "m1", "output_index": 0, "content_index": 0, "delta": p}
+        for p in _split(text, 3)
+    ]
+    events.append(
+        {"type": "response.output_text.done", "item_id": "m1", "output_index": 0, "content_index": 0, "text": text}
+    )
     raw = "".join(_sse(e) for e in events)
 
     out = await _collect(mw, [c.encode() for c in _split(raw, 17)], data)
@@ -788,8 +835,10 @@ async def test_stream_restores_responses_sse_bytes(mw):
 async def test_responses_stream_end_flushes_held_text(mw):
     data = await _mask(mw, GH_PAT)
     fake = _user_text(data)
-    events = [_resp_event("response.output_text.delta", item_id="m1", output_index=0, content_index=0, delta=d)
-              for d in ("key ", fake[:10])]
+    events = [
+        _resp_event("response.output_text.delta", item_id="m1", output_index=0, content_index=0, delta=d)
+        for d in ("key ", fake[:10])
+    ]
 
     out = await _collect(mw, events, data)
 
@@ -847,7 +896,8 @@ async def test_failed_call_drops_mapping(mw):
     data = await _mask(mw, GH_PAT)
 
     await mw.async_post_call_failure_hook(
-        request_data=data, original_exception=RuntimeError("x"), user_api_key_dict=None)
+        request_data=data, original_exception=RuntimeError("x"), user_api_key_dict=None
+    )
 
     assert mw.pending_calls() == 0
 
@@ -855,8 +905,7 @@ async def test_failed_call_drops_mapping(mw):
 async def test_stream_restore_error_fails_open(mw, mod, monkeypatch, fake_litellm):
     data = await _mask(mw, GH_PAT)
     fake = _user_text(data)
-    head = {"type": "content_block_delta", "index": 0,
-            "delta": {"type": "text_delta", "text": "key " + fake[:10]}}
+    head = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "key " + fake[:10]}}
     process = mod._StreamRestorer.process
 
     def flaky(self, chunk):
@@ -878,15 +927,16 @@ async def test_stream_restore_error_fails_open(mw, mod, monkeypatch, fake_litell
 async def test_stream_end_with_truncated_utf8_fails_open(mw):
     data = await _mask(mw, GH_PAT)
     fake = _user_text(data)
-    head = _sse({"type": "content_block_delta", "index": 0,
-                 "delta": {"type": "text_delta", "text": "key " + fake[:10]}}).encode()
+    head = _sse(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "key " + fake[:10]}}
+    ).encode()
     tail = b"event: x\ndata: \xe2\x82"
 
     out = await _collect(mw, [head, tail], data)
 
     raw = b"".join(out)
     assert raw.endswith(tail)
-    assert _joined(_parse_sse([raw[:-len(tail)].decode()])) == "key " + fake[:10]
+    assert _joined(_parse_sse([raw[: -len(tail)].decode()])) == "key " + fake[:10]
     assert mw.pending_calls() == 0
 
 
@@ -894,8 +944,7 @@ async def test_sse_fail_open_does_not_drop_or_duplicate_bytes(mw, mod, monkeypat
     data = await _mask(mw, GH_PAT)
     fake = _user_text(data)
     texts = ["key " + fake[:10], " middle", " boom", " end"]
-    raw = [_sse({"type": "content_block_delta", "index": 0,
-                 "delta": {"type": "text_delta", "text": t}}) for t in texts]
+    raw = [_sse({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": t}}) for t in texts]
     half = len(raw[1]) // 2
     chunks = [(raw[0] + raw[1][:half]).encode(), (raw[1][half:] + raw[2]).encode(), raw[3].encode()]
     real_events = mod._StreamRestorer._events
@@ -940,7 +989,8 @@ async def test_chat_finish_chunk_keeps_its_own_tool_call_deltas(mw):
     first = _chat_chunk(args='{"a": "')
     last = _chat_chunk(args=fake[:10], finish="tool_calls")
     last.choices[0].delta.tool_calls.append(
-        SimpleNamespace(index=1, id="t2", function=SimpleNamespace(name="other", arguments='{"b": 1}')))
+        SimpleNamespace(index=1, id="t2", function=SimpleNamespace(name="other", arguments='{"b": 1}'))
+    )
 
     out = await _collect(mw, [first, last], data)
 
@@ -969,8 +1019,10 @@ async def test_does_not_touch_data_urls_or_input_audio(mw):
 
 
 AWS_TEMP = "AS" + "IA" + "QW3ERT5YU7IO9PAS"
-PRESIGNED = ("https://bucket.s3.amazonaws.com/cat.png?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-             "&X-Amz-Credential=" + AWS_TEMP + "%2F20260930%2Fus-east-1%2Fs3%2Faws4_request")
+PRESIGNED = (
+    "https://bucket.s3.amazonaws.com/cat.png?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    "&X-Amz-Credential=" + AWS_TEMP + "%2F20260930%2Fus-east-1%2Fs3%2Faws4_request"
+)
 
 
 async def test_does_not_touch_remote_media_urls(mw):
@@ -997,8 +1049,7 @@ async def test_restore_does_not_touch_remote_media_urls(mw):
     data = await _mask(mw, AWS_TEMP)
     fake = _user_text(data)
     url = PRESIGNED.replace(AWS_TEMP, fake)
-    response = {"content": [{"type": "image", "source": {"type": "url", "url": url}},
-                            {"type": "text", "text": fake}]}
+    response = {"content": [{"type": "image", "source": {"type": "url", "url": url}}, {"type": "text", "text": fake}]}
 
     out = await mw.async_post_call_success_hook(data=data, user_api_key_dict=None, response=response)
 
@@ -1012,9 +1063,11 @@ async def test_concurrent_calls_sharing_an_id_both_restore(mw):
     fake1, fake2 = _user_text(first), _user_text(second)
 
     out1 = await mw.async_post_call_success_hook(
-        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake1}]})
+        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake1}]}
+    )
     out2 = await mw.async_post_call_success_hook(
-        data=second, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake2}]})
+        data=second, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake2}]}
+    )
 
     assert out1["content"][0]["text"] == GH_PAT
     assert out2["content"][0]["text"] == GH_PAT_2
@@ -1046,7 +1099,8 @@ async def test_unmasked_call_sharing_an_id_does_not_release_the_other(mw):
 
     await mw.async_post_call_success_hook(data=second, user_api_key_dict=None, response={"t": "hi"})
     out = await mw.async_post_call_success_hook(
-        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]})
+        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out["content"][0]["text"] == GH_PAT
     assert mw.pending_calls() == 0
@@ -1059,7 +1113,8 @@ async def test_unmasked_call_first_sharing_an_id_does_not_release_the_other(mw):
 
     await mw.async_post_call_success_hook(data=second, user_api_key_dict=None, response={"t": "hi"})
     out = await mw.async_post_call_success_hook(
-        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]})
+        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out["content"][0]["text"] == GH_PAT
     assert mw.pending_calls() == 0
@@ -1080,7 +1135,8 @@ async def test_stream_error_then_failure_hook_releases_once(mw):
         await _drain(stream)
     await mw.async_post_call_failure_hook(request_data=second)
     out = await mw.async_post_call_success_hook(
-        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]})
+        data=first, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out["content"][0]["text"] == GH_PAT
     assert mw.pending_calls() == 0
@@ -1108,8 +1164,12 @@ async def test_masks_request_with_non_string_type_fields(mw):
     data = {
         "litellm_call_id": "call-1",
         "messages": [
-            {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "t1", "name": "sh", "input": {"schema": schema, "t": {"type": {}}}}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "sh", "input": {"schema": schema, "t": {"type": {}}}}
+                ],
+            },
             {"role": "user", "content": [{"type": "text", "text": GH_PAT}]},
         ],
     }
@@ -1218,7 +1278,8 @@ async def test_clean_text_cache_is_bounded(mod, scans):
 
 async def _finish(mw, data, text="ok"):
     await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": text}]})
+        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": text}]}
+    )
 
 
 async def _earlier_fake(mw, secret=GH_PAT, call_id="turn-1", user=None):
@@ -1233,7 +1294,8 @@ async def test_stale_fake_from_earlier_turn_is_restored(mw):
     data = await _mask(mw, "continue", "turn-2")
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": f"use {fake}"}]})
+        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": f"use {fake}"}]}
+    )
 
     assert mw.pending_calls() == 0
     assert out["content"][0]["text"] == f"use {GH_PAT}"
@@ -1245,7 +1307,8 @@ async def test_stale_fake_is_restored_alongside_this_calls_fakes(mw):
     new = _user_text(data)
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": f"{old} {new}"}]})
+        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": f"{old} {new}"}]}
+    )
 
     assert out["content"][0]["text"] == f"{GH_PAT} {GH_PAT_2}"
 
@@ -1265,7 +1328,8 @@ async def test_stale_fake_is_not_restored_for_another_key(mw):
     data = await mw.async_pre_call_hook(other, None, _request("continue", "turn-2"), "anthropic_messages")
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=other, response={"content": [{"type": "text", "text": fake}]})
+        data=data, user_api_key_dict=other, response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out is None or out["content"][0]["text"] == fake
 
@@ -1279,7 +1343,8 @@ async def test_stale_fakes_expire(mod, monkeypatch):
     data = await _mask(mw, "continue", "turn-2")
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]})
+        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out is None or out["content"][0]["text"] == fake
     assert not mw.wants_stream(data)
@@ -1292,7 +1357,8 @@ async def test_stale_fakes_are_capped(mod):
     data = await _mask(mw, "continue", "turn-3")
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": first}]})
+        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": first}]}
+    )
 
     assert out is None or out["content"][0]["text"] == first
 
@@ -1303,7 +1369,8 @@ async def test_own_fakes_restore_even_when_evicted_from_the_global_map(mod):
     a, b = _user_text(data).split()
 
     out = await mw.async_post_call_success_hook(
-        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": f"{a} {b}"}]})
+        data=data, user_api_key_dict=None, response={"content": [{"type": "text", "text": f"{a} {b}"}]}
+    )
 
     assert out["content"][0]["text"] == f"{GH_PAT} {GH_PAT_2}"
 
@@ -1334,8 +1401,11 @@ async def test_stream_with_many_known_fakes_stays_fast(mod):
 
 
 async def test_masks_and_restores_compact_responses(mw):
-    data = {"litellm_call_id": "call-1", "instructions": f"env {GH_PAT}",
-            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": GOOGLE}]}]}
+    data = {
+        "litellm_call_id": "call-1",
+        "instructions": f"env {GH_PAT}",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": GOOGLE}]}],
+    }
 
     out = await mw.async_pre_call_hook(None, None, data, "acompact_responses")
 
@@ -1349,10 +1419,23 @@ async def test_masks_and_restores_compact_responses(mw):
 
 
 def _ws_frame(text):
-    return json.dumps({"type": "response.create", "model": "gpt-x", "instructions": f"env {text}",
-                       "input": [{"type": "message", "role": "user",
-                                  "content": [{"type": "input_text", "text": text},
-                                              {"type": "input_image", "image_url": "https://x.test/a?sig=" + text}]}]})
+    return json.dumps(
+        {
+            "type": "response.create",
+            "model": "gpt-x",
+            "instructions": f"env {text}",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": text},
+                        {"type": "input_image", "image_url": "https://x.test/a?sig=" + text},
+                    ],
+                }
+            ],
+        }
+    )
 
 
 async def test_masks_responses_websocket_first_frame(mw):
@@ -1381,15 +1464,21 @@ def _gemini_request():
         "systemInstruction": {"parts": [{"text": f"env {GH_PAT}"}]},
         "config": {"system_instruction": {"parts": [{"text": GOOGLE}]}, "temperature": 0.2},
         "contents": [
-            {"role": "user", "parts": [
-                {"text": f"key {SL_KEY}"},
-                {"inlineData": {"mimeType": "image/png", "data": "iVBOR/" + GOOGLE + "+x"}},
-                {"fileData": {"mimeType": "application/pdf", "fileUri": "https://x.test/f?sig=" + GH_PAT}},
-            ]},
-            {"role": "model", "parts": [
-                {"text": f"saw {GH_PAT_2}", "thought": True},
-                {"functionCall": {"name": "sh", "args": {"cmd": f"echo {GH_PAT_2}"}}, "thoughtSignature": "c2ln"},
-            ]},
+            {
+                "role": "user",
+                "parts": [
+                    {"text": f"key {SL_KEY}"},
+                    {"inlineData": {"mimeType": "image/png", "data": "iVBOR/" + GOOGLE + "+x"}},
+                    {"fileData": {"mimeType": "application/pdf", "fileUri": "https://x.test/f?sig=" + GH_PAT}},
+                ],
+            },
+            {
+                "role": "model",
+                "parts": [
+                    {"text": f"saw {GH_PAT_2}", "thought": True},
+                    {"functionCall": {"name": "sh", "args": {"cmd": f"echo {GH_PAT_2}"}}, "thoughtSignature": "c2ln"},
+                ],
+            },
             {"role": "user", "parts": [{"functionResponse": {"name": "sh", "response": {"out": GH_PAT_2}}}]},
         ],
     }
@@ -1415,8 +1504,11 @@ async def test_masks_google_generate_content(mw, call_type):
 async def test_gemini_dict_response_leaves_thought_parts_alone(mw):
     data = await mw.async_pre_call_hook(None, None, _gemini_request(), "agenerate_content")
     fake = _gemini_fake(data)
-    response = {"candidates": [{"content": {"role": "model", "parts": [
-        {"text": fake, "thought": True}, {"text": f"use {fake}"}]}}]}
+    response = {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": fake, "thought": True}, {"text": f"use {fake}"}]}}
+        ]
+    }
 
     out = await mw.async_post_call_success_hook(data=data, user_api_key_dict=None, response=response)
 
@@ -1440,8 +1532,12 @@ async def test_many_known_fakes_keep_calls_cheap(mod):
 
 async def test_gemini_opaque_keys_do_not_leak_into_other_formats(mw):
     tool_input = {"thought": True, "note": GH_PAT, "inlineData": GOOGLE, "thoughtSignature": SL_KEY}
-    data = {"litellm_call_id": "call-1", "messages": [{"role": "assistant", "content": [
-        {"type": "tool_use", "id": "t1", "name": "sh", "input": tool_input}]}]}
+    data = {
+        "litellm_call_id": "call-1",
+        "messages": [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "sh", "input": tool_input}]}
+        ],
+    }
 
     out = await mw.async_pre_call_hook(None, None, data, "anthropic_messages")
 
@@ -1451,8 +1547,15 @@ async def test_gemini_opaque_keys_do_not_leak_into_other_formats(mw):
 
 
 async def test_gemini_function_args_with_opaque_key_names_are_masked(mw):
-    data = {"litellm_call_id": "call-1", "contents": [{"role": "model", "parts": [
-        {"functionCall": {"name": "sh", "args": {"thought": True, "inlineData": GH_PAT}}}]}]}
+    data = {
+        "litellm_call_id": "call-1",
+        "contents": [
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "sh", "args": {"thought": True, "inlineData": GH_PAT}}}],
+            }
+        ],
+    }
 
     out = await mw.async_pre_call_hook(None, None, data, "agenerate_content")
 
@@ -1471,8 +1574,9 @@ async def test_restores_google_generate_content_response(mw):
     part = SimpleNamespace(text=f"use {fake}", thought=None, function_call=None)
     call = {"functionCall": {"name": "sh", "args": {"cmd": fake, "n": 1}}}
     thought = {"text": fake, "thought": True}
-    response = SimpleNamespace(candidates=[SimpleNamespace(index=0, content=SimpleNamespace(
-        role="model", parts=[part, call, thought]))])
+    response = SimpleNamespace(
+        candidates=[SimpleNamespace(index=0, content=SimpleNamespace(role="model", parts=[part, call, thought]))]
+    )
 
     out = await mw.async_post_call_success_hook(data=data, user_api_key_dict=None, response=response)
 
@@ -1497,10 +1601,14 @@ def _gemini_sse(text=None, finish=None, call=None):
 
 def _gemini_parse(chunks):
     events = _parse_sse(chunks)
-    text = "".join(p.get("text", "") for e in events for c in e.get("candidates", [])
-                   for p in c["content"]["parts"])
-    calls = [p["functionCall"] for e in events for c in e.get("candidates", []) for p in c["content"]["parts"]
-             if "functionCall" in p]
+    text = "".join(p.get("text", "") for e in events for c in e.get("candidates", []) for p in c["content"]["parts"])
+    calls = [
+        p["functionCall"]
+        for e in events
+        for c in e.get("candidates", [])
+        for p in c["content"]["parts"]
+        if "functionCall" in p
+    ]
     return events, text, calls
 
 
@@ -1546,11 +1654,16 @@ async def test_provider_token_count_is_masked(mw, mod):
     mod.install_token_count_masking(mw, proxy_server)
 
     result = await proxy_server._try_provider_token_count(
-        provider_counter=None, custom_llm_provider="anthropic", model_to_use="m",
+        provider_counter=None,
+        custom_llm_provider="anthropic",
+        model_to_use="m",
         messages=[{"role": "user", "content": [{"type": "text", "text": GH_PAT}]}],
         contents=[{"role": "user", "parts": [{"text": GOOGLE}]}],
-        deployment={"litellm_params": {"api_key": "provider-key"}}, request_model="m",
-        tools=[{"name": "t", "description": f"uses {SL_KEY}"}], system=f"env {GH_PAT_2}")
+        deployment={"litellm_params": {"api_key": "provider-key"}},
+        request_model="m",
+        tools=[{"name": "t", "description": f"uses {SL_KEY}"}],
+        system=f"env {GH_PAT_2}",
+    )
 
     assert result == "count"
     sent = proxy_server.sent[0]

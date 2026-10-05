@@ -5,7 +5,6 @@ import types
 import pytest
 
 
-
 @pytest.fixture
 def registry_module():
     sys.modules.pop("litellm_middleware.registry", None)
@@ -27,8 +26,7 @@ def test_load_middlewares_skips_failed_specs(monkeypatch, registry_module):
     monkeypatch.setitem(sys.modules, "good_module", good_module)
 
     specs = (
-        registry_module.MiddlewareSpec(
-            "missing", "missing_module", "middleware", required=False),
+        registry_module.MiddlewareSpec("missing", "missing_module", "middleware", required=False),
         registry_module.MiddlewareSpec("good", "good_module", "middleware"),
     )
     logger = Logger()
@@ -40,9 +38,7 @@ def test_load_middlewares_skips_failed_specs(monkeypatch, registry_module):
 
 
 def test_load_middlewares_raises_for_failed_required_specs(registry_module):
-    specs = (
-        registry_module.MiddlewareSpec("missing", "missing_module", "middleware"),
-    )
+    specs = (registry_module.MiddlewareSpec("missing", "missing_module", "middleware"),)
 
     with pytest.raises(RuntimeError, match="required missing middleware"):
         registry_module.load_middlewares(specs)

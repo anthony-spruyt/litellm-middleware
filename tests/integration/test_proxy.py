@@ -13,8 +13,12 @@ def _github_token() -> str:
 
 
 def _ask(text: str, stream: bool = False) -> dict:
-    return {"model": MODEL, "max_tokens": 64, "stream": stream,
-            "messages": [{"role": "user", "content": f"my token is {text} ok"}]}
+    return {
+        "model": MODEL,
+        "max_tokens": 64,
+        "stream": stream,
+        "messages": [{"role": "user", "content": f"my token is {text} ok"}],
+    }
 
 
 def _sent_upstream(proxy, token: str) -> str:
@@ -47,16 +51,20 @@ def test_streamed_messages_restore_fake_split_across_chunks(proxy):
         frames = [json.loads(line[5:]) for line in resp.iter_lines() if line.startswith("data:")]
 
     _sent_upstream(proxy, token)
-    text = "".join(f["delta"]["text"] for f in frames
-                   if f.get("type") == "content_block_delta" and f["delta"].get("type") == "text_delta")
+    text = "".join(
+        f["delta"]["text"]
+        for f in frames
+        if f.get("type") == "content_block_delta" and f["delta"].get("type") == "text_delta"
+    )
     assert text == f"echo: my token is {token} ok"
 
 
 def test_chat_completions_masks_upstream_and_restores_reply(proxy):
     token = _github_token()
-    resp = proxy.client.post("/v1/chat/completions", json={
-        "model": MODEL, "max_tokens": 64,
-        "messages": [{"role": "user", "content": f"my token is {token} ok"}]})
+    resp = proxy.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "max_tokens": 64, "messages": [{"role": "user", "content": f"my token is {token} ok"}]},
+    )
     assert resp.status_code == 200, resp.text
 
     _sent_upstream(proxy, token)
@@ -106,8 +114,9 @@ def test_ratelimit_headers_reach_client(proxy, stream):
 
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages"])
 def test_error_body_carries_call_id(proxy, path):
-    resp = proxy.client.post(path, json={
-        "model": "no-such-model", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]})
+    resp = proxy.client.post(
+        path, json={"model": "no-such-model", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]}
+    )
 
     assert resp.status_code >= 400, resp.text
     call_id = resp.headers.get("x-litellm-call-id")
@@ -121,8 +130,12 @@ def test_mcp_tool_call_routes_on_a_cold_tool_mapping(proxy):
     resp = proxy.client.post(
         "/mcp",
         headers={"x-litellm-api-key": f"Bearer {MASTER_KEY}", "accept": "application/json, text/event-stream"},
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-              "params": {"name": f"{MCP_SERVER}-echo", "arguments": {"text": "hi"}}},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": f"{MCP_SERVER}-echo", "arguments": {"text": "hi"}},
+        },
     )
 
     assert resp.status_code == 200, resp.text

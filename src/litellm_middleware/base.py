@@ -13,8 +13,7 @@ class ProxyMiddleware(Protocol):
         cache: Any,
         data: dict,
         call_type: str,
-    ) -> PreCallResult:
-        ...
+    ) -> PreCallResult: ...
 
     async def async_log_success_event(
         self,
@@ -22,5 +21,4 @@ class ProxyMiddleware(Protocol):
         response_obj: Any,
         start_time: Any,
         end_time: Any,
-    ) -> None:
-        ...
+    ) -> None: ...

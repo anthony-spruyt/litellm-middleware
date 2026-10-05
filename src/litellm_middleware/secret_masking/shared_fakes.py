@@ -36,8 +36,9 @@ class SharedFakes:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-        keys = HKDF(algorithm=hashes.SHA256(), length=64, salt=None,
-                    info=b"litellm-secret-masking-shared-v1").derive(salt)
+        keys = HKDF(algorithm=hashes.SHA256(), length=64, salt=None, info=b"litellm-secret-masking-shared-v1").derive(
+            salt
+        )
         self._aead = AESGCM(keys[:32])
         self._mac_key = keys[32:]
         self._factory = client_factory
@@ -122,7 +123,8 @@ class SharedFakes:
                 try:
                     async with asyncio.timeout(self._write_timeout):
                         await self._connection().execute_command(
-                            "HSETEX", key, "EX", self._ttl, "FIELDS", len(entries), *args)
+                            "HSETEX", key, "EX", self._ttl, "FIELDS", len(entries), *args
+                        )
                 except Exception as exc:  # noqa: BLE001 - Valkey down must never fail a request
                     self._fail(exc)
                     break
@@ -164,7 +166,7 @@ class SharedFakes:
         if pair is not None:
             self._opened.move_to_end(cache_key)
             return pair
-        nonce, sealed = value[1:1 + _NONCE_LEN], value[1 + _NONCE_LEN:]
+        nonce, sealed = value[1 : 1 + _NONCE_LEN], value[1 + _NONCE_LEN :]
         try:
             fake, real = json.loads(self._aead.decrypt(nonce, sealed, _aad(key, field)))
         except Exception:  # noqa: BLE001 - entries from another salt or tampered with are skipped

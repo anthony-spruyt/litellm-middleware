@@ -79,7 +79,8 @@ _OPAQUE_FIELDS = {
 }
 # Gemini parts carry no "type", so their binary payloads and signatures are recognised by key.
 _GEMINI_OPAQUE_PART_KEYS = frozenset(
-    {"inlineData", "inline_data", "fileData", "file_data", "thoughtSignature", "thought_signature"})
+    {"inlineData", "inline_data", "fileData", "file_data", "thoughtSignature", "thought_signature"}
+)
 _GEMINI_SYSTEM_KEYS = ("systemInstruction", "system_instruction")
 _GEMINI_FIELDS = ("contents", *_GEMINI_SYSTEM_KEYS, "config")
 _MASKED_FIELDS = {
@@ -825,8 +826,14 @@ class _StreamRestorer:
         return [
             *(self._flush_event(i) for i in indices),
             *self._flush_responses(),
-            *({"candidates": [{"index": c, "content": {"role": "model", "parts": [{"text": self.hold.flush(("gemini", c))}]}}]}
-              for c in gemini),
+            *(
+                {
+                    "candidates": [
+                        {"index": c, "content": {"role": "model", "parts": [{"text": self.hold.flush(("gemini", c))}]}}
+                    ]
+                }
+                for c in gemini
+            ),
         ]
 
     def _gemini_event(self, event: dict) -> list:

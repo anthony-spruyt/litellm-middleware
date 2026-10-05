@@ -33,9 +33,7 @@ def load_middlewares(specs: Iterable[MiddlewareSpec], logger: Any = None) -> tup
             loaded.append(getattr(module, spec.attribute))
         except Exception as exc:  # noqa: BLE001 - one optional middleware must not disable all
             if spec.required:
-                raise RuntimeError(
-                    f"failed to load required {spec.name} middleware"
-                ) from exc
+                raise RuntimeError(f"failed to load required {spec.name} middleware") from exc
             if logger is not None:
                 logger.warning("failed to load %s middleware: %s", spec.name, exc)
     return tuple(loaded)

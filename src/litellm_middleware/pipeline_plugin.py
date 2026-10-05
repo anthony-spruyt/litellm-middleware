@@ -8,6 +8,4 @@ from litellm_middleware.pipeline import MiddlewarePipeline
 from litellm_middleware.registry import load_default_middlewares
 
 
-pipeline_middleware = MiddlewarePipeline(
-    load_default_middlewares(logger=verbose_proxy_logger)
-)
+pipeline_middleware = MiddlewarePipeline(load_default_middlewares(logger=verbose_proxy_logger))

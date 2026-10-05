@@ -21,7 +21,7 @@ def _from_hidden_params(response: Any) -> dict[str, str]:
     hidden = response.get("_hidden_params") if isinstance(response, dict) else getattr(response, "_hidden_params", None)
     additional = (hidden or {}).get("additional_headers") if isinstance(hidden, dict) else None
     return {
-        k[len("llm_provider-"):]: str(v)
+        k[len("llm_provider-") :]: str(v)
         for k, v in (additional or {}).items()
         if isinstance(k, str) and k.lower().startswith(_PREFIXED)
     }

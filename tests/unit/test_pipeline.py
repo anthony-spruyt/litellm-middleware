@@ -6,7 +6,6 @@ import types
 import pytest
 
 
-
 @pytest.fixture(autouse=True)
 def fake_litellm(monkeypatch):
     litellm = types.ModuleType("litellm")
@@ -49,8 +48,7 @@ class SystemToDeveloperMiddleware:
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         system = data.pop("system", None)
         if system:
-            data.setdefault("messages", []).insert(
-                0, {"role": "developer", "content": system})
+            data.setdefault("messages", []).insert(0, {"role": "developer", "content": system})
         return data
 
 
@@ -78,10 +76,12 @@ class FailingSuccessMiddleware:
 
 
 async def test_pre_call_pipeline_preserves_declared_order(pipeline_module):
-    pipeline = pipeline_module.MiddlewarePipeline((
-        AddSystemMiddleware(),
-        SystemToDeveloperMiddleware(),
-    ))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (
+            AddSystemMiddleware(),
+            SystemToDeveloperMiddleware(),
+        )
+    )
     data = {"model": "chatgpt/gpt-5.5", "messages": []}
 
     out = await pipeline.async_pre_call_hook(None, None, data, "anthropic_messages")
@@ -94,10 +94,12 @@ async def test_pre_call_pipeline_preserves_declared_order(pipeline_module):
 
 
 async def test_pre_call_fail_open_continues_to_next_middleware(pipeline_module):
-    pipeline = pipeline_module.MiddlewarePipeline((
-        FailingPreCallMiddleware(),
-        AddSystemMiddleware(),
-    ))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (
+            FailingPreCallMiddleware(),
+            AddSystemMiddleware(),
+        )
+    )
     data = {"messages": []}
 
     out = await pipeline.async_pre_call_hook(None, None, data, "completion")
@@ -113,10 +115,12 @@ async def test_pre_call_can_fail_closed(pipeline_module):
 
 
 async def test_pre_call_string_rejection_short_circuits(pipeline_module):
-    pipeline = pipeline_module.MiddlewarePipeline((
-        RejectingPreCallMiddleware(),
-        AddSystemMiddleware(),
-    ))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (
+            RejectingPreCallMiddleware(),
+            AddSystemMiddleware(),
+        )
+    )
 
     out = await pipeline.async_pre_call_hook(None, None, {"messages": []}, "completion")
 
@@ -182,12 +186,14 @@ async def _stream(items):
 
 
 async def test_post_call_success_hooks_chain_in_order(pipeline_module):
-    pipeline = pipeline_module.MiddlewarePipeline((
-        SuffixResponseMiddleware("-a"),
-        NoOpResponseMiddleware(),
-        FailingResponseMiddleware(),
-        SuffixResponseMiddleware("-b"),
-    ))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (
+            SuffixResponseMiddleware("-a"),
+            NoOpResponseMiddleware(),
+            FailingResponseMiddleware(),
+            SuffixResponseMiddleware("-b"),
+        )
+    )
 
     out = await pipeline.async_post_call_success_hook({}, None, "resp")
 
@@ -201,14 +207,17 @@ async def test_post_call_success_hook_without_middlewares_returns_response(pipel
 
 
 async def test_streaming_iterator_hooks_chain_in_order(pipeline_module):
-    pipeline = pipeline_module.MiddlewarePipeline((
-        UpperStreamMiddleware(),
-        FailingStreamMiddleware(),
-        SuffixStreamMiddleware(),
-    ))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (
+            UpperStreamMiddleware(),
+            FailingStreamMiddleware(),
+            SuffixStreamMiddleware(),
+        )
+    )
 
-    out = [c async for c in pipeline.async_post_call_streaming_iterator_hook(
-        None, _stream(["a", "b"]), {"suffix": "!"})]
+    out = [
+        c async for c in pipeline.async_post_call_streaming_iterator_hook(None, _stream(["a", "b"]), {"suffix": "!"})
+    ]
 
     assert out == ["A!", "B!"]
 
@@ -217,8 +226,7 @@ async def test_streaming_iterator_without_middlewares_passes_through(pipeline_mo
     pipeline = pipeline_module.MiddlewarePipeline(())
     items = [object(), object()]
 
-    out = [c async for c in pipeline.async_post_call_streaming_iterator_hook(
-        None, _stream(items), {})]
+    out = [c async for c in pipeline.async_post_call_streaming_iterator_hook(None, _stream(items), {})]
 
     assert out == items
 
@@ -243,11 +251,13 @@ class FailingHeadersMiddleware:
 async def test_response_headers_hooks_merge_in_order_and_fail_open(pipeline_module):
     first = StaticHeadersMiddleware({"a": "1", "b": "1"})
     last = StaticHeadersMiddleware({"b": "2"})
-    pipeline = pipeline_module.MiddlewarePipeline((
-        first, FailingHeadersMiddleware(), StaticHeadersMiddleware(None), last))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (first, FailingHeadersMiddleware(), StaticHeadersMiddleware(None), last)
+    )
 
     out = await pipeline.async_post_call_response_headers_hook(
-        {"id": 1}, None, "resp", request_headers={"h": "v"}, litellm_call_info={"i": 1})
+        {"id": 1}, None, "resp", request_headers={"h": "v"}, litellm_call_info={"i": 1}
+    )
 
     assert out == {"a": "1", "b": "2"}
     assert last.seen == ({"id": 1}, "resp", {"h": "v"}, {"i": 1})
@@ -273,8 +283,7 @@ def test_response_headers_hook_is_defined_on_the_pipeline_class_itself(pipeline_
 
 def test_response_headers_hook_accepts_litellm_call_info(pipeline_module):
     # LiteLLM only passes litellm_call_info when the signature names it.
-    params = inspect.signature(
-        pipeline_module.MiddlewarePipeline.async_post_call_response_headers_hook).parameters
+    params = inspect.signature(pipeline_module.MiddlewarePipeline.async_post_call_response_headers_hook).parameters
 
     assert "litellm_call_info" in params
 
@@ -283,12 +292,16 @@ class FailureRecorderMiddleware:
     def __init__(self):
         self.seen = None
 
-    async def async_post_call_failure_hook(self, request_data, original_exception, user_api_key_dict, traceback_str=None):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
         self.seen = request_data
 
 
 class FailingFailureMiddleware:
-    async def async_post_call_failure_hook(self, request_data, original_exception, user_api_key_dict, traceback_str=None):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
         raise RuntimeError("boom")
 
 
@@ -305,20 +318,24 @@ class TransformingFailureMiddleware:
     def __init__(self, replacement):
         self.replacement = replacement
 
-    async def async_post_call_failure_hook(self, request_data, original_exception, user_api_key_dict, traceback_str=None):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
         return self.replacement
 
 
 async def test_post_call_failure_hook_returns_first_transformed_error_and_runs_all_hooks(pipeline_module):
     first, second = RuntimeError("first"), RuntimeError("second")
     recorder = FailureRecorderMiddleware()
-    pipeline = pipeline_module.MiddlewarePipeline((
-        FailingFailureMiddleware(),
-        FailureRecorderMiddleware(),
-        TransformingFailureMiddleware(first),
-        TransformingFailureMiddleware(second),
-        recorder,
-    ))
+    pipeline = pipeline_module.MiddlewarePipeline(
+        (
+            FailingFailureMiddleware(),
+            FailureRecorderMiddleware(),
+            TransformingFailureMiddleware(first),
+            TransformingFailureMiddleware(second),
+            recorder,
+        )
+    )
 
     out = await pipeline.async_post_call_failure_hook({"id": 1}, RuntimeError("x"), None)
 
@@ -367,8 +384,7 @@ async def _drain_into(stream, out):
 async def test_streaming_hook_error_before_first_output_fails_open(pipeline_module, fake_litellm):
     pipeline = pipeline_module.MiddlewarePipeline((MidStreamFailingMiddleware(),))
 
-    out = [c async for c in pipeline.async_post_call_streaming_iterator_hook(
-        None, _stream(["a", "b", "c"]), {})]
+    out = [c async for c in pipeline.async_post_call_streaming_iterator_hook(None, _stream(["a", "b", "c"]), {})]
 
     assert out == ["a", "b", "c"]
     assert "RuntimeError" in fake_litellm.verbose_proxy_logger.warnings[-1][0]
@@ -387,7 +403,8 @@ async def test_streaming_hook_does_not_swallow_upstream_errors(pipeline_module):
     pipeline = pipeline_module.MiddlewarePipeline((PassThroughStreamMiddleware(),))
 
     stream = pipeline.async_post_call_streaming_iterator_hook(
-        None, _failing_upstream(["a"], ValueError("provider down")), {})
+        None, _failing_upstream(["a"], ValueError("provider down")), {}
+    )
     out = []
 
     with pytest.raises(ValueError):
@@ -447,7 +464,8 @@ async def test_streaming_hook_error_after_output_fails_closed_instead_of_droppin
     pipeline = pipeline_module.MiddlewarePipeline((SseBufferingMiddleware(),))
 
     stream = pipeline.async_post_call_streaming_iterator_hook(
-        None, _stream(["data: 1\n\ndata: 2", "\n\nfail\n\n", "data: 3\n\n"]), {})
+        None, _stream(["data: 1\n\ndata: 2", "\n\nfail\n\n", "data: 3\n\n"]), {}
+    )
     out = []
 
     with pytest.raises(RuntimeError, match="boom"):
