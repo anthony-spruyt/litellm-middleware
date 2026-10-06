@@ -36,15 +36,25 @@ def _events(model, text):
     start = _message(model, "")
     start["content"] = []
     yield "message_start", {"type": "message_start", "message": start}
-    yield "content_block_start", {"type": "content_block_start", "index": 0,
-                                  "content_block": {"type": "text", "text": ""}}
+    yield (
+        "content_block_start",
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    )
     # Small chunks so a fake straddles chunk boundaries.
     for i in range(0, len(text), CHUNK):
-        yield "content_block_delta", {"type": "content_block_delta", "index": 0,
-                                      "delta": {"type": "text_delta", "text": text[i:i + CHUNK]}}
+        yield (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text[i : i + CHUNK]}},
+        )
     yield "content_block_stop", {"type": "content_block_stop", "index": 0}
-    yield "message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                            "usage": {"output_tokens": 10}}
+    yield (
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 10},
+        },
+    )
     yield "message_stop", {"type": "message_stop"}
 
 

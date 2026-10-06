@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
+from typing import Any
 
 _UNIFIED = "anthropic-ratelimit-unified-"
 _PREFIXED = "llm_provider-" + _UNIFIED
@@ -12,7 +11,7 @@ _PREFIXED = "llm_provider-" + _UNIFIED
 class RatelimitHeadersMiddleware:
     async def async_post_call_response_headers_hook(
         self, data: dict, user_api_key_dict: Any, response: Any, request_headers=None, litellm_call_info=None
-    ) -> Optional[dict[str, str]]:
+    ) -> dict[str, str] | None:
         headers = {**_from_upstream_response(data), **_from_hidden_params(response)}
         return headers or None
 
@@ -21,7 +20,7 @@ def _from_hidden_params(response: Any) -> dict[str, str]:
     hidden = response.get("_hidden_params") if isinstance(response, dict) else getattr(response, "_hidden_params", None)
     additional = (hidden or {}).get("additional_headers") if isinstance(hidden, dict) else None
     return {
-        k[len("llm_provider-"):]: str(v)
+        k[len("llm_provider-") :]: str(v)
         for k, v in (additional or {}).items()
         if isinstance(k, str) and k.lower().startswith(_PREFIXED)
     }

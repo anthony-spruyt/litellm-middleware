@@ -1,18 +1,9 @@
 import asyncio
 import importlib
-import json
-import os
 import sys
 import types
 
 import pytest
-
-
-_HERE = os.path.dirname(__file__)
-_PLUGINS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
-if _PLUGINS_DIR not in sys.path:
-    sys.path.insert(0, _PLUGINS_DIR)
-
 
 # Built by concatenation so secret scanners don't flag the fixtures.
 GH_PAT = "gh" + "p_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5"
@@ -45,17 +36,17 @@ def fake_litellm(monkeypatch):
 @pytest.fixture
 def sf():
     for name in (
-        "middleware.secret_masking.shared_fakes",
-        "middleware.secret_masking.secret_masking",
-        "middleware.pipeline",
+        "litellm_middleware.secret_masking.shared_fakes",
+        "litellm_middleware.secret_masking.secret_masking",
+        "litellm_middleware.pipeline",
     ):
         sys.modules.pop(name, None)
-    return importlib.import_module("middleware.secret_masking.shared_fakes")
+    return importlib.import_module("litellm_middleware.secret_masking.shared_fakes")
 
 
 @pytest.fixture
 def sm(sf):
-    return importlib.import_module("middleware.secret_masking.secret_masking")
+    return importlib.import_module("litellm_middleware.secret_masking.secret_masking")
 
 
 class FakeValkey:
@@ -80,7 +71,7 @@ class FakeValkey:
         assert (ex, fields) == ("EX", "FIELDS")
         assert count == len(pairs) // 2
         entries = self.data.setdefault(key, {})
-        for field, value in zip(pairs[::2], pairs[1::2]):
+        for field, value in zip(pairs[::2], pairs[1::2], strict=True):
             entries[field.encode()] = (value, self.now + ttl)
         return 1
 
@@ -283,8 +274,7 @@ def _user(scope=SCOPE):
 
 
 def _request(text, call_id):
-    return {"litellm_call_id": call_id,
-            "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
+    return {"litellm_call_id": call_id, "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
 
 
 def _pod(sm, sf, valkey):
@@ -305,7 +295,8 @@ async def test_fake_from_other_replica_is_restored(sm, sf, valkey):
 
     data = await pod_b.async_pre_call_hook(_user(), None, _request("continue", "turn-2"), "anthropic_messages")
     out = await pod_b.async_post_call_success_hook(
-        data=data, user_api_key_dict=_user(), response={"content": [{"type": "text", "text": f"use {fake}"}]})
+        data=data, user_api_key_dict=_user(), response={"content": [{"type": "text", "text": f"use {fake}"}]}
+    )
 
     assert out["content"][0]["text"] == f"use {GH_PAT}"
     assert pod_b.pending_calls() == 0
@@ -317,16 +308,22 @@ async def test_fake_from_other_replica_is_restored_in_stream(sm, sf, valkey):
     data = await pod_b.async_pre_call_hook(_user(), None, _request("continue", "turn-2"), "anthropic_messages")
     assert pod_b.wants_stream(data)
 
-    events = [{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": p}}
-              for p in (f"use {fake[:10]}", fake[10:], " ok")]
+    events = [
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": p}}
+        for p in (f"use {fake[:10]}", fake[10:], " ok")
+    ]
     events.append({"type": "message_stop"})
 
     async def upstream():
         for event in events:
             yield event
 
-    out = [c async for c in pod_b.async_post_call_streaming_iterator_hook(
-        response=upstream(), request_data=data, user_api_key_dict=_user())]
+    out = [
+        c
+        async for c in pod_b.async_post_call_streaming_iterator_hook(
+            response=upstream(), request_data=data, user_api_key_dict=_user()
+        )
+    ]
 
     text = "".join(e["delta"]["text"] for e in out if e["type"] == "content_block_delta")
     assert text == f"use {GH_PAT} ok"
@@ -338,10 +335,11 @@ async def test_other_virtual_key_cannot_restore(sm, sf, valkey):
     pod_b = _pod(sm, sf, valkey)
 
     data = await pod_b.async_pre_call_hook(
-        _user("another-key"), None, _request("continue", "turn-2"), "anthropic_messages")
+        _user("another-key"), None, _request("continue", "turn-2"), "anthropic_messages"
+    )
     out = await pod_b.async_post_call_success_hook(
-        data=data, user_api_key_dict=_user("another-key"),
-        response={"content": [{"type": "text", "text": fake}]})
+        data=data, user_api_key_dict=_user("another-key"), response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out["content"][0]["text"] == fake
 
@@ -349,14 +347,18 @@ async def test_other_virtual_key_cannot_restore(sm, sf, valkey):
 async def test_clean_stream_passes_through_untouched(sm, sf, valkey):
     pod = _pod(sm, sf, valkey)
     data = await pod.async_pre_call_hook(_user(), None, _request("hi", "turn-1"), "anthropic_messages")
-    chunks = [b"data: {\"type\": \"ping\"}\n\n"]
+    chunks = [b'data: {"type": "ping"}\n\n']
 
     async def upstream():
         for chunk in chunks:
             yield chunk
 
-    out = [c async for c in pod.async_post_call_streaming_iterator_hook(
-        response=upstream(), request_data=data, user_api_key_dict=_user())]
+    out = [
+        c
+        async for c in pod.async_post_call_streaming_iterator_hook(
+            response=upstream(), request_data=data, user_api_key_dict=_user()
+        )
+    ]
 
     assert out == chunks
     assert pod.pending_calls() == 0
@@ -367,7 +369,8 @@ async def test_pre_call_does_not_wait_for_valkey(sm, sf, valkey):
     pod = _pod(sm, sf, valkey)
 
     await asyncio.wait_for(
-        pod.async_pre_call_hook(_user(), None, _request(GH_PAT, "turn-1"), "anthropic_messages"), 0.5)
+        pod.async_pre_call_hook(_user(), None, _request(GH_PAT, "turn-1"), "anthropic_messages"), 0.5
+    )
 
 
 async def test_valkey_down_keeps_local_restore(sm, sf, valkey):
@@ -377,6 +380,7 @@ async def test_valkey_down_keeps_local_restore(sm, sf, valkey):
 
     data = await pod.async_pre_call_hook(_user(), None, _request("continue", "turn-2"), "anthropic_messages")
     out = await pod.async_post_call_success_hook(
-        data=data, user_api_key_dict=_user(), response={"content": [{"type": "text", "text": fake}]})
+        data=data, user_api_key_dict=_user(), response={"content": [{"type": "text", "text": fake}]}
+    )
 
     assert out["content"][0]["text"] == GH_PAT

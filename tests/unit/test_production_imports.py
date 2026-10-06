@@ -1,14 +1,8 @@
 import importlib
-import os
 import sys
 import types
 
 import pytest
-
-
-_HERE = os.path.dirname(__file__)
-_MIDDLEWARE_DIR = os.path.dirname(_HERE)
-_PLUGINS_DIR = os.path.dirname(_MIDDLEWARE_DIR)
 
 
 @pytest.fixture
@@ -31,24 +25,20 @@ def production_import_shape(monkeypatch):
     custom_logger.CustomLogger = CustomLogger
     logging.verbose_proxy_logger = Logger()
 
-    custom_callbacks = types.ModuleType("custom_callbacks")
-    custom_callbacks.__path__ = [_PLUGINS_DIR]
-
     monkeypatch.setitem(sys.modules, "litellm", litellm)
     monkeypatch.setitem(sys.modules, "litellm.integrations", integrations)
     monkeypatch.setitem(sys.modules, "litellm.integrations.custom_logger", custom_logger)
     monkeypatch.setitem(sys.modules, "litellm._logging", logging)
-    monkeypatch.setitem(sys.modules, "custom_callbacks", custom_callbacks)
 
 
 def test_production_dotted_imports_resolve(production_import_shape):
     modules = [
-        "custom_callbacks.middleware.pipeline",
-        "custom_callbacks.middleware.registry",
-        "custom_callbacks.middleware.pipeline_plugin",
-        "custom_callbacks.middleware.secret_masking.shared_fakes",
-        "custom_callbacks.middleware.secret_masking.secret_masking",
-        "custom_callbacks.middleware.ratelimit_headers.ratelimit_headers",
+        "litellm_middleware.pipeline",
+        "litellm_middleware.registry",
+        "litellm_middleware.pipeline_plugin",
+        "litellm_middleware.secret_masking.shared_fakes",
+        "litellm_middleware.secret_masking.secret_masking",
+        "litellm_middleware.ratelimit_headers.ratelimit_headers",
     ]
 
     for module in modules:
@@ -60,27 +50,27 @@ def test_production_dotted_imports_resolve(production_import_shape):
 
 def test_production_pipeline_loads_secret_masking(production_import_shape):
     for module in [
-        "custom_callbacks.middleware.secret_masking.secret_masking",
-        "custom_callbacks.middleware.registry",
-        "custom_callbacks.middleware.pipeline_plugin",
+        "litellm_middleware.secret_masking.secret_masking",
+        "litellm_middleware.registry",
+        "litellm_middleware.pipeline_plugin",
     ]:
         sys.modules.pop(module, None)
 
-    plugin = importlib.import_module("custom_callbacks.middleware.pipeline_plugin")
-    masking = importlib.import_module("custom_callbacks.middleware.secret_masking.secret_masking")
+    plugin = importlib.import_module("litellm_middleware.pipeline_plugin")
+    masking = importlib.import_module("litellm_middleware.secret_masking.secret_masking")
 
     assert masking.secret_masking in plugin.pipeline_middleware.middlewares
 
 
 def test_production_pipeline_loads_ratelimit_headers(production_import_shape):
     for module in [
-        "custom_callbacks.middleware.ratelimit_headers.ratelimit_headers",
-        "custom_callbacks.middleware.registry",
-        "custom_callbacks.middleware.pipeline_plugin",
+        "litellm_middleware.ratelimit_headers.ratelimit_headers",
+        "litellm_middleware.registry",
+        "litellm_middleware.pipeline_plugin",
     ]:
         sys.modules.pop(module, None)
 
-    plugin = importlib.import_module("custom_callbacks.middleware.pipeline_plugin")
-    restorer = importlib.import_module("custom_callbacks.middleware.ratelimit_headers.ratelimit_headers")
+    plugin = importlib.import_module("litellm_middleware.pipeline_plugin")
+    restorer = importlib.import_module("litellm_middleware.ratelimit_headers.ratelimit_headers")
 
     assert restorer.ratelimit_headers in plugin.pipeline_middleware.middlewares
