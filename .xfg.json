@@ -29,11 +29,14 @@
         ".github/CODEOWNERS",
         ".github/renovate.json5",
         ".github/workflows/ci.yaml",
+        ".github/workflows/rebuild-release.yaml",
+        ".github/workflows/release-please.yaml",
         ".github/workflows/trivy-scan.yaml",
         ".gitignore",
         ".gitleaks.toml",
         ".hadolint.yaml",
         ".jsonlintrc",
+        ".lint-config.sh",
         ".lycheeignore",
         ".markdownlint.json",
         ".markdownlintignore",
@@ -45,7 +48,6 @@
         ".pre-commit-config.yaml",
         ".prettierignore",
         ".prettierrc.yaml",
-        ".pylintrc",
         ".secretlintignore",
         ".shellcheckrc",
         ".sonarcloud.properties",
@@ -53,8 +55,8 @@
         ".vscode/settings.json",
         ".yamllint.yml",
         "LICENSE",
-        "lint-config.sh",
         "lint.sh",
+        "ruff-base.toml",
         "trivy-mega-linter.yaml"
       ]
     }
