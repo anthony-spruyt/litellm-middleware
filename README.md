@@ -21,7 +21,7 @@ src/litellm_middleware/        the package; the only thing the image ships
 tests/
   unit/                        mirrors the package; litellm is stubbed
   integration/                 boots the real LiteLLM image
-    litellm.yaml               the pinned LiteLLM image
+litellm-image.yaml             the pinned LiteLLM image
 Dockerfile                     package-only image
 ```
 
@@ -82,7 +82,9 @@ After a rollout, check the LiteLLM logs for `failed to load <registry-name> midd
 
 The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden_params`, and `proxy_server._try_provider_token_count`. These change between LiteLLM releases without notice.
 
-`tests/integration/litellm.yaml` pins the LiteLLM image (tag and digest) the integration tests run against. Keep it equal to the version the cluster deploys, and bump both together. Renovate tracks the pin through its `# renovate:` annotation, so a LiteLLM bump PR here runs the integration suite against the new version before the cluster takes it.
+`litellm-image.yaml` pins the LiteLLM image (tag and digest) the integration tests run against. Renovate tracks it through its `# renovate:` annotation, so a LiteLLM bump PR here runs the integration suite against the new version.
+
+spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `.github/renovate-overrides.json5`. It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
 
 ## Rate-limit headers
 
