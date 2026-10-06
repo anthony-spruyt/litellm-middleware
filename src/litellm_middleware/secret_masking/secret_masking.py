@@ -14,16 +14,16 @@ import string
 import sys
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from ..pipeline import MiddlewarePipeline
 from .shared_fakes import SharedFakes, shared_from_env
 
-
 _URLSAFE_20 = r"[A-Za-z0-9_\-]{20,}"
 
 # (prefix, body, suffix). Only the body is replaced; the prefix keeps the fake recognisable.
-_PATTERNS: tuple[tuple[str, str, Optional[str]], ...] = (
+_PATTERNS: tuple[tuple[str, str, str | None], ...] = (
     (r"sl_", r"[A-Za-z0-9]{29,}", None),
     (r"sk-ant-[a-z]+\d{2}-", r"[A-Za-z0-9_\-]{32,}", None),
     (r"sk-or-v1-", r"[a-f0-9]{64}(?![A-Za-z0-9])", None),
@@ -79,7 +79,8 @@ _OPAQUE_FIELDS = {
 }
 # Gemini parts carry no "type", so their binary payloads and signatures are recognised by key.
 _GEMINI_OPAQUE_PART_KEYS = frozenset(
-    {"inlineData", "inline_data", "fileData", "file_data", "thoughtSignature", "thought_signature"})
+    {"inlineData", "inline_data", "fileData", "file_data", "thoughtSignature", "thought_signature"}
+)
 _GEMINI_SYSTEM_KEYS = ("systemInstruction", "system_instruction")
 _GEMINI_FIELDS = ("contents", *_GEMINI_SYSTEM_KEYS, "config")
 _MASKED_FIELDS = {
@@ -127,8 +128,8 @@ _NEVER = re.compile(r"\b\B")
 class _FakeMap:
     def __init__(self) -> None:
         self.fakes: dict[str, str] = {}
-        self._pattern: Optional[re.Pattern] = None
-        self._sorted: Optional[list[str]] = None
+        self._pattern: re.Pattern | None = None
+        self._sorted: list[str] | None = None
         self._firsts: frozenset[str] = frozenset()
         self._longest = 0
 
@@ -179,7 +180,7 @@ class _KnownFakes(_FakeMap):
 
 
 class _CallState(_FakeMap):
-    def __init__(self, known: Optional[_KnownFakes] = None, scope: Any = None) -> None:
+    def __init__(self, known: _KnownFakes | None = None, scope: Any = None) -> None:
         super().__init__()
         self.created = time.monotonic()
         self.holders: set[int] = set()
@@ -187,7 +188,7 @@ class _CallState(_FakeMap):
         self.scope = scope
         self.remote: Any = None
 
-    def merge(self, other: "_CallState") -> None:
+    def merge(self, other: _CallState) -> None:
         self.fakes.update(other.fakes)
         self.holders |= other.holders
         self.known = self.known or other.known
@@ -240,7 +241,7 @@ class SecretMaskingMiddleware:
         clean_cache_size: int = 4096,
         clean_cache_min_len: int = 4096,
         max_known_fakes: int = 2000,
-        shared: Optional[SharedFakes] = None,
+        shared: SharedFakes | None = None,
     ) -> None:
         self._key = key
         self._shared = shared
@@ -513,7 +514,7 @@ def _map_strings(value: Any, fn: Callable[[str], str]) -> Any:
         return value if _DATA_URL_RE.match(value) else fn(value)
     if isinstance(value, list):
         out = [_map_strings(item, fn) for item in value]
-        return out if any(a is not b for a, b in zip(out, value)) else value
+        return out if any(a is not b for a, b in zip(out, value, strict=True)) else value
     if isinstance(value, dict):
         kind = _kind(value)
         if kind in _OPAQUE_BLOCK_TYPES:
@@ -531,7 +532,7 @@ def _map_dict(value: dict, fn: Callable[[Any, Any], Any]) -> dict:
 def _map_gemini_content(value: Any, fn: Callable[[str], str]) -> Any:
     if isinstance(value, list):
         out = [_map_gemini_content(item, fn) for item in value]
-        return out if any(a is not b for a, b in zip(out, value)) else value
+        return out if any(a is not b for a, b in zip(out, value, strict=True)) else value
     if isinstance(value, dict) and isinstance(value.get("parts"), list):
         return _map_dict(value, lambda k, v: _map_gemini_parts(v, fn) if k == "parts" else v)
     return _map_strings(value, fn)
@@ -539,7 +540,7 @@ def _map_gemini_content(value: Any, fn: Callable[[str], str]) -> Any:
 
 def _map_gemini_parts(parts: list, fn: Callable[[str], str]) -> list:
     out = [_map_gemini_part(part, fn) for part in parts]
-    return out if any(a is not b for a, b in zip(out, parts)) else parts
+    return out if any(a is not b for a, b in zip(out, parts, strict=True)) else parts
 
 
 def _map_gemini_part(part: Any, fn: Callable[[str], str]) -> Any:
@@ -613,7 +614,7 @@ def _gemini_part_texts(part: Any):
         yield from _json_slots(args)
 
 
-def _gemini_append_tail(candidate: dict, last_text: Optional[dict], tail: str) -> None:
+def _gemini_append_tail(candidate: dict, last_text: dict | None, tail: str) -> None:
     if last_text is not None:
         last_text["text"] += tail
         return
@@ -697,7 +698,7 @@ class _StreamRestorer:
         self.hold = _Holdback(state)
         self.delta_types: dict[int, str] = {}
         self.sse_buffer = ""
-        self.mode: Optional[str] = None
+        self.mode: str | None = None
         self.decoder = codecs.getincrementaldecoder("utf-8")()
         self.last_chat_chunk: Any = None
         self.chat_choices: dict[int, Any] = {}
@@ -825,8 +826,14 @@ class _StreamRestorer:
         return [
             *(self._flush_event(i) for i in indices),
             *self._flush_responses(),
-            *({"candidates": [{"index": c, "content": {"role": "model", "parts": [{"text": self.hold.flush(("gemini", c))}]}}]}
-              for c in gemini),
+            *(
+                {
+                    "candidates": [
+                        {"index": c, "content": {"role": "model", "parts": [{"text": self.hold.flush(("gemini", c))}]}}
+                    ]
+                }
+                for c in gemini
+            ),
         ]
 
     def _gemini_event(self, event: dict) -> list:
@@ -1016,7 +1023,7 @@ def _own(chunk: Any, out: Any) -> Any:
     return copy.deepcopy(chunk) if out is chunk else out
 
 
-def _parse_sse_data(block: str) -> Optional[dict]:
+def _parse_sse_data(block: str) -> dict | None:
     lines = [line[5:] for line in block.split("\n") if line.startswith("data:")]
     if not lines:
         return None

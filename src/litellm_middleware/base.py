@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, Union
+from typing import Any, Protocol
 
-
-PreCallResult = Optional[Union[Exception, dict, str]]
+PreCallResult = Exception | dict | str | None
 
 
 class ProxyMiddleware(Protocol):
@@ -13,8 +12,7 @@ class ProxyMiddleware(Protocol):
         cache: Any,
         data: dict,
         call_type: str,
-    ) -> PreCallResult:
-        ...
+    ) -> PreCallResult: ...
 
     async def async_log_success_event(
         self,
@@ -22,5 +20,4 @@ class ProxyMiddleware(Protocol):
         response_obj: Any,
         start_time: Any,
         end_time: Any,
-    ) -> None:
-        ...
+    ) -> None: ...
