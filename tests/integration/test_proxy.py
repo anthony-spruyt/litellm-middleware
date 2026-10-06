@@ -99,7 +99,8 @@ def test_proxy_wraps_provider_token_count(proxy):
 def test_provider_token_count_is_masked(proxy):
     token = _github_token()
     sent = proxy.python(_COUNT_TOKENS.replace("sys.argv[1]", repr(f"my token is {token}")))
-    assert '"messages"' in sent and '"system"' in sent
+    assert '"messages"' in sent
+    assert '"system"' in sent
     assert token not in sent
 
 

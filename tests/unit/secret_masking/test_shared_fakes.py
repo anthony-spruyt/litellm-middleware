@@ -164,7 +164,7 @@ async def test_moved_entry_fails_authentication(sf, valkey):
     store = _store(sf, valkey)
     store.put(SCOPE, {"fake-1": GH_PAT})
     await store.drain()
-    [(key, field, value)] = valkey.stored()
+    [(_, field, value)] = valkey.stored()
     other_key = store._key(store._scope_id("other-key"))
     valkey.data[other_key] = {field: (value, float("inf"))}
 

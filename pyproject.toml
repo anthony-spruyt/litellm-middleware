@@ -33,7 +33,35 @@ line-length = 120
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["B", "E", "F", "I", "UP", "W"]
+select = [
+    "A",
+    "ASYNC",
+    "B",
+    "BLE",
+    "C4",
+    "E",
+    "F",
+    "FURB",
+    "I",
+    "LOG",
+    "N",
+    "PERF",
+    "PIE",
+    "PLE",
+    "PLW",
+    "PT",
+    "RET",
+    "RUF",
+    "SIM",
+    "UP",
+    "W",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["litellm_middleware"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true

@@ -4,8 +4,8 @@
 # This file is sourced by lint.sh for both local and CI runs
 
 # MegaLinter Docker image (use digest for reproducibility)
-# renovate: datasource=docker depName=ghcr.io/anthony-spruyt/megalinter-container-images
-MEGALINTER_IMAGE="ghcr.io/anthony-spruyt/megalinter-container-images:v11.0.3@sha256:ae40d08f9bd0345b3f852518f7c29960cd68252234959765bbe4a2ddfc643c40"
+# renovate: datasource=docker depName=ghcr.io/anthony-spruyt/megalinter-python
+MEGALINTER_IMAGE="ghcr.io/anthony-spruyt/megalinter-python:1.0.0@sha256:1bc5bf1a854a1addd7142a096b1a1c85c6521fe9367ef92d424a26b3d7aa93f8"
 
 # Skip linting for renovate/dependabot commits in CI
 SKIP_BOT_COMMITS=false
