@@ -40,6 +40,7 @@ uv run ruff check . && uv run ruff format --check .
 
 - **Unit** tests run each middleware against a stubbed `litellm`. They are fast, but they can't catch LiteLLM renaming a hook or changing its signature or call order.
 - **Integration** tests need a container runtime. They build the `Dockerfile`, unpack the image's files, and mount them read-only into the pinned LiteLLM image at the same path and with the same `PYTHONPATH` as production. A fake Anthropic upstream runs in the same container. Each test sends a real request and checks what reached the upstream and what came back.
+- CI runs both suites on Python 3.13, the LiteLLM image's interpreter (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
 - The test proxy only sets the `general_settings` keys the middleware depends on (`include_call_id_in_error_body`). It has no database, Redis or network.

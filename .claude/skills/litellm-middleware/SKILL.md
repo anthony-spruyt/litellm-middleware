@@ -42,12 +42,12 @@ The README's Layout, Testing and Deployment sections hold the rules. This skill 
    No packaging step exists. The Dockerfile copies the whole package, and `test_package_image.py` fails if the image and `src/litellm_middleware/` differ.
 
 9. **Docs.** If anything is non-obvious (an upstream workaround, a removal condition, a failure mode), add a `##` section to `README.md` and a row to its middleware table.
-10. **Ship.** Open a PR with a conventional commit (`feat:` for a new middleware). Once it merges, the release publishes `ghcr.io/anthony-spruyt/litellm-middleware:<version>`.
+10. **Ship.** Open a PR with a conventional commit (`feat:` for a new middleware); its title becomes the squash commit. CI runs the unit and integration suites and builds the image. After it merges, release-please opens a release PR; merging that publishes `ghcr.io/anthony-spruyt/litellm-middleware:<version>`. Only `feat`, `fix`, `perf`, `refactor` and `revert` commits cut a release.
 11. **Deploy.** In spruyt-labs, bump the litellm-middleware image volume reference in `cluster/apps/litellm/litellm/app/values.yaml` to the new tag. No other cluster change is needed: the mount path, `PYTHONPATH` and `callbacks:` value stay the same. After the rollout, check the litellm pod logs for `failed to load <registry-name> middleware` (the kebab-case name).
 
 ## Bumping LiteLLM
 
-Renovate updates the tag and digest in `tests/integration/litellm.yaml`. Run the integration suite on that PR. Keep the pin equal to the LiteLLM image spruyt-labs deploys: merge here first (release if middleware had to change), then bump the cluster.
+Renovate updates the tag and digest in `tests/integration/litellm.yaml`, and CI runs the integration suite on that PR. Keep the pin equal to the LiteLLM image spruyt-labs deploys: merge here first (release if middleware had to change), then bump the cluster.
 
 ## Gotchas
 

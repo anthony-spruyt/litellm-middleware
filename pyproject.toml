@@ -1,6 +1,6 @@
 [project]
 name = "litellm-middleware"
-version = "0.1.0"
+version = "0.0.0"
 description = "LiteLLM proxy callback pipeline for composable middleware"
 readme = "README.md"
 license = "MIT"
