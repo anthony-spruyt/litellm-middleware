@@ -32,7 +32,7 @@ def load_middlewares(specs: Iterable[MiddlewareSpec], logger: Any = None) -> tup
         try:
             module = importlib.import_module(spec.module)
             loaded.append(getattr(module, spec.attribute))
-        except Exception as exc:  # noqa: BLE001 - one optional middleware must not disable all
+        except Exception as exc:
             if spec.required:
                 raise RuntimeError(f"failed to load required {spec.name} middleware") from exc
             if logger is not None:

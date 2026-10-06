@@ -143,7 +143,7 @@ def proxy(package_files, tmp_path_factory):
     finally:
         if os.environ.get("LITELLM_IT_SHOW_LOGS"):
             print(proxy.logs())
-        subprocess.run([_cli(), "rm", "-f", name], capture_output=True)
+        subprocess.run([_cli(), "rm", "-f", name], capture_output=True, check=False)
         try:
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
@@ -176,7 +176,9 @@ class Proxy:
 
     def python(self, code: str) -> str:
         """Runs code in the proxy container, with its PYTHONPATH and LiteLLM install."""
-        out = subprocess.run([_cli(), "exec", self.name, "python", "-c", code], capture_output=True, text=True)
+        out = subprocess.run(
+            [_cli(), "exec", self.name, "python", "-c", code], capture_output=True, text=True, check=False
+        )
         assert out.returncode == 0, out.stderr
         return out.stdout
 
@@ -184,7 +186,9 @@ class Proxy:
         subprocess.run([_cli(), "exec", "-d", self.name, "python", "/it/fake_mcp.py"], check=True)
         deadline = time.monotonic() + 30
         probe = f"import socket; socket.create_connection(('127.0.0.1', {MCP_PORT}), 1)"
-        while subprocess.run([_cli(), "exec", self.name, "python", "-c", probe], capture_output=True).returncode:
+        while subprocess.run(
+            [_cli(), "exec", self.name, "python", "-c", probe], capture_output=True, check=False
+        ).returncode:
             assert time.monotonic() < deadline, "fake MCP server did not start"
             time.sleep(1)
 

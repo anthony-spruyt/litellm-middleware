@@ -24,7 +24,7 @@ class MiddlewarePipeline(CustomLogger):
                 result = hook(user_api_key_dict, cache, data, call_type)
                 if inspect.isawaitable(result):
                     result = await result
-            except Exception as exc:  # noqa: BLE001 - middleware should not break proxy traffic
+            except Exception as exc:
                 if not self.fail_open:
                     raise
                 self._log_warning("%s pre-call failed open: %s", middleware, type(exc).__name__)
@@ -52,7 +52,7 @@ class MiddlewarePipeline(CustomLogger):
                 result = hook(data=data, user_api_key_dict=user_api_key_dict, response=response)
                 if inspect.isawaitable(result):
                     result = await result
-            except Exception as exc:  # noqa: BLE001 - middleware should not break proxy traffic
+            except Exception as exc:
                 if not self.fail_open:
                     raise
                 self._log_warning("%s post-call failed open: %s", middleware, type(exc).__name__)
@@ -77,7 +77,7 @@ class MiddlewarePipeline(CustomLogger):
             return True
         try:
             return bool(wants(request_data))
-        except Exception as exc:  # noqa: BLE001 - an unanswerable opt-out keeps the middleware on the stream
+        except Exception as exc:
             if not self.fail_open:
                 raise
             self._log_warning("%s wants_stream failed open: %s", middleware, type(exc).__name__)
@@ -91,7 +91,7 @@ class MiddlewarePipeline(CustomLogger):
             async for chunk in inner:
                 source.pulled = None
                 yield chunk
-        except Exception as exc:  # noqa: BLE001 - middleware should not break proxy traffic
+        except Exception as exc:
             # After its first yield a middleware may hold buffered data, so replay would corrupt the stream.
             if source.failed or source.pulled is None or not self.fail_open:
                 raise
@@ -135,7 +135,7 @@ class MiddlewarePipeline(CustomLogger):
                 )
                 if inspect.isawaitable(result):
                     result = await result
-            except Exception as exc:  # noqa: BLE001 - header hooks must not break proxy traffic
+            except Exception as exc:
                 if not self.fail_open:
                     raise
                 self._log_warning("%s response headers hook failed open: %s", middleware, type(exc).__name__)
@@ -163,7 +163,7 @@ class MiddlewarePipeline(CustomLogger):
                 )
                 if inspect.isawaitable(result):
                     result = await result
-            except Exception as exc:  # noqa: BLE001 - failure hooks must never mask the original error
+            except Exception as exc:
                 if not self.fail_open:
                     raise
                 self._log_warning("%s failure hook failed open: %s", middleware, type(exc).__name__)
@@ -183,7 +183,7 @@ class MiddlewarePipeline(CustomLogger):
                 result = hook(kwargs, response_obj, start_time, end_time)
                 if inspect.isawaitable(result):
                     await result
-            except Exception as exc:  # noqa: BLE001 - success logging must never fail responses
+            except Exception as exc:
                 if not self.fail_open:
                     raise
                 self._log_warning("%s success hook failed open: %s", middleware, type(exc).__name__)

@@ -582,12 +582,12 @@ async def _collect(mw, chunks, data):
 
 def _parse_sse(chunks):
     raw = "".join(c.decode() if isinstance(c, bytes) else c for c in chunks)
-    events = []
-    for block in raw.split("\n\n"):
-        for line in block.split("\n"):
-            if line.startswith("data: "):
-                events.append(json.loads(line[6:]))
-    return events
+    return [
+        json.loads(line.removeprefix("data: "))
+        for block in raw.split("\n\n")
+        for line in block.split("\n")
+        if line.startswith("data: ")
+    ]
 
 
 def _joined(events, field="text"):
@@ -1130,7 +1130,7 @@ async def test_stream_error_then_failure_hook_releases_once(mw):
 
     stream = mw.async_post_call_streaming_iterator_hook(response=broken(), request_data=second)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="provider down"):
         await _drain(stream)
     await mw.async_post_call_failure_hook(request_data=second)
     out = await mw.async_post_call_success_hook(

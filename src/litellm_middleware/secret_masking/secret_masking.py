@@ -1028,7 +1028,7 @@ def _parse_sse_data(block: str) -> dict | None:
     if not lines:
         return None
     try:
-        event = json.loads("\n".join(line[1:] if line.startswith(" ") else line for line in lines))
+        event = json.loads("\n".join(line.removeprefix(" ") for line in lines))
     except ValueError:
         return None
     return event if isinstance(event, dict) else None
