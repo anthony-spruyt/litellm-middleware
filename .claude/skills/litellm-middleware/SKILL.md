@@ -47,7 +47,9 @@ The README's Layout, Testing and Deployment sections hold the rules. This skill 
 
 ## Bumping LiteLLM
 
-Renovate updates the tag and digest in `litellm-image.yaml`, and CI runs the integration suite on that PR. If the middleware needs a fix for the new version, push it to the same PR. Once it merges, spruyt-labs' Renovate offers the cluster the same tag and digest; it reads them from this file on `main`, so the cluster cannot get ahead of what CI tested. If the PR needed a middleware change, merge the release PR and deploy that image before or with the LiteLLM bump.
+Renovate updates the tag and digest in `litellm-image.yaml`, and CI runs the integration suite on that PR. Once it merges, spruyt-labs' Renovate offers the cluster the same tag and digest. It reads them from this file on `main`, so the cluster cannot get ahead of what CI tested.
+
+If the new LiteLLM needs a middleware change, don't push it to the bump PR. Merging both together would hand the cluster the new LiteLLM while it still runs the old middleware image. Land the change as its own `fix:` PR that works on both versions, release it, and deploy it to the cluster. Then rebase the bump PR and merge it.
 
 ## Gotchas
 
