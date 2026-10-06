@@ -88,13 +88,15 @@ The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden
 
 spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `.github/renovate-overrides.json5`. It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
 
-The bump PR's integration tests run against `main`'s source, but the cluster runs the released image. The required `Release Gate` check (`.github/workflows/release-gate.yaml`) closes that gap. It runs `scripts/release_gate.py` as it stands on `main`, not the PR's copy, so a PR can't loosen the gate it is gated by. A PR that renames, deletes or edits `litellm-image.yaml` counts as a bump, and the check fails it in three cases:
+The bump PR's integration tests run against `main`'s source, but the cluster runs the released image. The required `Release Gate` check (`.github/workflows/release-gate.yaml`) closes that gap. It runs `scripts/release_gate.py` as it stands on `main`, not the PR's copy, and CODEOWNERS requires a code-owner review for changes to the gate's script, workflow and tests. A PR that renames, deletes or edits `litellm-image.yaml` counts as a bump, and the check fails it in three cases:
 
 - the PR also changes the gate: `scripts/release_gate.py`, its workflow or its tests
 - the PR also changes the image: `src/litellm_middleware/`, `Dockerfile` or `.dockerignore`
 - the image paths on `main` differ from the latest published release
 
-The check passes on every other PR. When it fails, merge the release-please PR, wait for the release to be published (image pushed), then re-run the check on the bump PR. The check compares against the live `main` and the live latest release, so the re-run passes with no new commit. Only `feat`, `fix`, `perf`, `refactor` and `revert` commits cut a release. If a `chore` or `style` commit touched the image paths, no release PR opens, so cut one with a `Release-As:` footer.
+A PR's workflow passes its flags to `main`'s copy of the script, so keep the script's flags backward compatible for one release.
+
+The check passes on every other PR. When it fails, merge the release-please PR, wait for the release to be published (image pushed), then re-run the check on the bump PR. The check compares against the live `main` and the live latest release, so the re-run passes with no new commit. Only `feat`, `fix`, `perf`, `refactor` and `revert` commits cut a release. If a `build`, `chore`, `ci`, `docs`, `style` or `test` commit touched the image paths, no release PR opens, so cut one with a `Release-As:` footer.
 
 The gate checks that the release is published, not that it is deployed: in spruyt-labs, merge the middleware image bump before the LiteLLM bump.
 
