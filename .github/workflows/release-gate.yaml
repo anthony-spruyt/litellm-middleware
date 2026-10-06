@@ -25,13 +25,11 @@ jobs:
           BASE_REF: "${{ github.base_ref }}"
         run: |
           gate="$RUNNER_TEMP/release_gate.py"
-          if git cat-file -e "origin/$BASE_REF:scripts/release_gate.py" 2>/dev/null; then
-            git show "origin/$BASE_REF:scripts/release_gate.py" > "$gate"
-          else
-            # Only until the gate first lands on the base branch; after that a PR can't reach this path.
-            echo "::warning::origin/$BASE_REF has no release gate yet; running the PR's copy"
-            cp scripts/release_gate.py "$gate"
+          if ! git cat-file -e "origin/$BASE_REF:scripts/release_gate.py" 2>/dev/null; then
+            echo "::error::origin/$BASE_REF has no scripts/release_gate.py; restore it on $BASE_REF before this check can pass"
+            exit 1
           fi
+          git show "origin/$BASE_REF:scripts/release_gate.py" > "$gate"
       - name: "Check the middleware is released"
         env:
           GH_TOKEN: "${{ github.token }}"
