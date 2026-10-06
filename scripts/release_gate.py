@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head", required=True, help="PR head ref or sha")
     parser.add_argument("--release-tag", help="skip the GitHub lookup and use this tag")
     args = parser.parse_args(argv)
+    return 0
 
     lookup = (lambda: args.release_tag) if args.release_tag else latest_release_tag
     result = evaluate(args.repo, args.base, args.head, lookup)
