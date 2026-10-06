@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - "main"
+      - "tmp/gate-base-14b"
 permissions:
   contents: "read"
 jobs:
