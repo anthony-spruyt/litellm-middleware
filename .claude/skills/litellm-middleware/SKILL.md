@@ -49,7 +49,9 @@ The README's Layout, Testing and Deployment sections hold the rules. This skill 
 
 Renovate updates the tag and digest in `litellm-image.yaml`, and CI runs the integration suite on that PR. Once it merges, spruyt-labs' Renovate offers the cluster the same tag and digest. It reads them from this file on `main`, so the cluster cannot get ahead of what CI tested.
 
-If the new LiteLLM needs a middleware change, don't push it to the bump PR. Merging both together would hand the cluster the new LiteLLM while it still runs the old middleware image. Land the change as its own `fix:` PR that works on both versions, release it, and deploy it to the cluster. Then rebase the bump PR and merge it.
+If the new LiteLLM needs a middleware change, don't push it to the bump PR. Merging both together would hand the cluster the new LiteLLM while it still runs the old middleware image. Land the change as its own `fix:` PR that works on both versions, release it, and deploy it to the cluster. Then re-run the bump PR's checks and merge it.
+
+The required `Release Gate` check enforces this; see the README's "LiteLLM version coupling" section. It fails a bump PR that touches `src/litellm_middleware/`, and fails while that package on `main` differs from the latest published release. To clear it, merge the release-please PR, then re-run the check. It reads the live `main` and the live release, so it needs no rebase.
 
 ## Gotchas
 
