@@ -18,7 +18,7 @@ The README's Layout, Testing and Deployment sections hold the rules. This skill 
 | Unit tests        | `tests/unit/<name>/test_<name>.py`                     |
 | Import test       | `tests/unit/test_production_imports.py`                |
 | Integration tests | `tests/integration/test_proxy.py`                      |
-| Pinned LiteLLM    | `tests/integration/litellm.yaml`                       |
+| Pinned LiteLLM    | `litellm-image.yaml`                                   |
 
 `<name>` is snake_case (`secret_masking`). The registry name is kebab-case (`secret-masking`).
 
@@ -47,7 +47,7 @@ The README's Layout, Testing and Deployment sections hold the rules. This skill 
 
 ## Bumping LiteLLM
 
-Renovate updates the tag and digest in `tests/integration/litellm.yaml`, and CI runs the integration suite on that PR. Keep the pin equal to the LiteLLM image spruyt-labs deploys: merge here first (release if middleware had to change), then bump the cluster.
+Renovate updates the tag and digest in `litellm-image.yaml`, and CI runs the integration suite on that PR. If the middleware needs a fix for the new version, push it to the same PR. Once it merges, spruyt-labs' Renovate offers the cluster the same tag and digest; it reads them from this file on `main`, so the cluster cannot get ahead of what CI tested. If the PR needed a middleware change, merge the release PR and deploy that image before or with the LiteLLM bump.
 
 ## Gotchas
 

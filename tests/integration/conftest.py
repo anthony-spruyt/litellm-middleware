@@ -43,7 +43,7 @@ def _free_port() -> int:
 
 
 def litellm_image() -> str:
-    return yaml.safe_load((HERE / "litellm.yaml").read_text())["image"]
+    return yaml.safe_load((REPO_ROOT / "litellm-image.yaml").read_text())["image"]
 
 
 def export_package_image(dest: Path) -> None:
