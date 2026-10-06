@@ -179,6 +179,7 @@ def test_bump_fails_when_the_pr_also_changes_the_gate(gate, repo, path):
 
     assert not result.ok
     assert path in result.message
+    assert "reviewed by the code owner" in result.message
 
 
 @pytest.mark.parametrize(

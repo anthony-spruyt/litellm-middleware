@@ -66,8 +66,8 @@ def evaluate(repo: Path, base: str, head: str, release_tag: Callable[[], str | N
     if gate:
         return Result(
             False,
-            f"this LiteLLM bump also changes the release gate. CI runs the gate from {base}, "
-            f"so land the gate change in its own PR first:\n{listing(gate)}",
+            "a LiteLLM bump must not change the release gate; drop these changes. "
+            f"A gate change needs its own PR, reviewed by the code owner:\n{listing(gate)}",
         )
 
     in_pr = changed(repo, f"{base}...{head}", paths=IMAGE_PATHS)
