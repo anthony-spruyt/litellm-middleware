@@ -407,7 +407,7 @@ async def test_streaming_hook_does_not_swallow_upstream_errors(pipeline_module):
     )
     out = []
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="provider down"):
         await _drain_into(stream, out)
 
     assert out == ["a"]
