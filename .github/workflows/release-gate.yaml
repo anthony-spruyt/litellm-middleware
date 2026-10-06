@@ -20,10 +20,22 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: "Take the gate from the base branch"
+        env:
+          BASE_REF: "${{ github.base_ref }}"
+        run: |
+          gate="$RUNNER_TEMP/release_gate.py"
+          if git cat-file -e "origin/$BASE_REF:scripts/release_gate.py" 2>/dev/null; then
+            git show "origin/$BASE_REF:scripts/release_gate.py" > "$gate"
+          else
+            # Only until the gate first lands on the base branch; after that a PR can't reach this path.
+            echo "::warning::origin/$BASE_REF has no release gate yet; running the PR's copy"
+            cp scripts/release_gate.py "$gate"
+          fi
       - name: "Check the middleware is released"
         env:
           GH_TOKEN: "${{ github.token }}"
           GH_REPO: "${{ github.repository }}"
           BASE_REF: "${{ github.base_ref }}"
           HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
-        run: 'python3 scripts/release_gate.py --base "origin/$BASE_REF" --head "$HEAD_SHA"'
+        run: 'python3 "$RUNNER_TEMP/release_gate.py" --repo . --base "origin/$BASE_REF" --head "$HEAD_SHA"'

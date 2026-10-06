@@ -102,7 +102,9 @@ def test_bump_passes_when_image_contents_match_the_release(gate, repo):
     assert "v1.0.0" in result.message
 
 
-@pytest.mark.parametrize("path", ["src/litellm_middleware/pipeline.py", "src/litellm_middleware/new/new.py"])
+@pytest.mark.parametrize(
+    "path", ["src/litellm_middleware/pipeline.py", "src/litellm_middleware/new/new.py", "Dockerfile", ".dockerignore"]
+)
 def test_bump_fails_when_main_has_unreleased_image_changes(gate, repo, path):
     repo.write(path, "unreleased fix\n")
     repo.commit("fix on main, not released")
@@ -115,7 +117,9 @@ def test_bump_fails_when_main_has_unreleased_image_changes(gate, repo, path):
     assert not result.ok
     assert path in result.message
     assert "release the middleware first" in result.message
-    assert "merge the release-please PR, then re-run" in result.message
+    assert "merge the release-please PR, wait for the release to be published (image pushed), then re-run" in (
+        result.message
+    )
 
 
 def test_bump_fails_against_live_base_even_when_branched_before_the_fix(gate, repo):
@@ -147,17 +151,52 @@ def test_bump_passes_on_rerun_once_the_fix_is_released(gate, repo):
     assert check(gate, repo, tag="v1.0.1").ok
 
 
-def test_bump_fails_when_the_pr_itself_changes_the_image(gate, repo):
+@pytest.mark.parametrize("path", ["src/litellm_middleware/pipeline.py", "Dockerfile"])
+def test_bump_fails_when_the_pr_itself_changes_the_image(gate, repo, path):
     repo.branch("bump")
     repo.write("litellm-image.yaml", "image: litellm:v2\n")
-    repo.write("src/litellm_middleware/pipeline.py", "compat fix in the bump PR\n")
+    repo.write(path, "compat fix in the bump PR\n")
     repo.commit("bump with fix")
 
     result = check(gate, repo)
 
     assert not result.ok
-    assert "src/litellm_middleware/pipeline.py" in result.message
+    assert path in result.message
     assert "own PR" in result.message
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["scripts/release_gate.py", ".github/workflows/release-gate.yaml", "tests/unit/scripts/test_release_gate.py"],
+)
+def test_bump_fails_when_the_pr_also_changes_the_gate(gate, repo, path):
+    repo.branch("bump")
+    repo.write("litellm-image.yaml", "image: litellm:v2\n")
+    repo.write(path, "always pass\n")
+    repo.commit("bump and loosen the gate")
+
+    result = check(gate, repo)
+
+    assert not result.ok
+    assert path in result.message
+
+
+@pytest.mark.parametrize(
+    "move_pin",
+    [["mv", "litellm-image.yaml", "litellm.yaml"], ["rm", "-q", "litellm-image.yaml"]],
+    ids=["rename", "delete"],
+)
+def test_moving_the_pin_counts_as_a_bump(gate, repo, move_pin):
+    repo.write("src/litellm_middleware/pipeline.py", "unreleased fix\n")
+    repo.commit("fix on main, not released")
+    repo.branch("bump")
+    repo.git(*move_pin)
+    repo.commit("move the pin")
+
+    result = check(gate, repo)
+
+    assert not result.ok
+    assert "release the middleware first" in result.message
 
 
 def test_bump_fails_when_nothing_is_released(gate, repo):
@@ -171,10 +210,10 @@ def test_bump_fails_when_nothing_is_released(gate, repo):
     assert "no published release" in result.message
 
 
-def test_image_paths_match_the_dockerfile_copy_sources(gate):
+def test_image_paths_cover_the_dockerfile_and_its_copy_sources(gate):
     sources = re.findall(r"^(?:COPY|ADD)\s+(?:--\S+\s+)*(\S+)", (REPO_ROOT / "Dockerfile").read_text(), re.MULTILINE)
 
-    assert sorted(source.rstrip("/") for source in sources) == sorted(gate.IMAGE_PATHS)
+    assert {source.rstrip("/") for source in sources} | {"Dockerfile", ".dockerignore"} <= set(gate.IMAGE_PATHS)
 
 
 def fake_gh(tmp_path, monkeypatch, script: str) -> None:
@@ -186,8 +225,8 @@ def fake_gh(tmp_path, monkeypatch, script: str) -> None:
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
-def test_latest_release_tag_reads_the_published_release(gate, tmp_path, monkeypatch):
-    fake_gh(tmp_path, monkeypatch, '[ "$*" = "release view --json tagName --jq .tagName" ] && echo v1.2.3')
+def test_latest_release_tag_returns_the_tag_gh_reports(gate, tmp_path, monkeypatch):
+    fake_gh(tmp_path, monkeypatch, 'echo "v1.2.3"')
 
     assert gate.latest_release_tag() == "v1.2.3"
 

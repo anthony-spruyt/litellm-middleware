@@ -14,8 +14,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PIN_FILE = "litellm-image.yaml"
-IMAGE_PATHS = ("src/litellm_middleware",)
-RELEASE_FIRST = "release the middleware first: merge the release-please PR, then re-run this check"
+IMAGE_PATHS = ("src/litellm_middleware", "Dockerfile", ".dockerignore")
+GATE_PATHS = (
+    "scripts/release_gate.py",
+    ".github/workflows/release-gate.yaml",
+    "tests/unit/scripts/test_release_gate.py",
+)
+RELEASE_FIRST = (
+    "release the middleware first: merge the release-please PR, "
+    "wait for the release to be published (image pushed), then re-run this check"
+)
 
 
 @dataclass(frozen=True)
@@ -29,7 +37,7 @@ def git(repo: Path, *args: str) -> str:
 
 
 def changed(repo: Path, *revs: str, paths: tuple[str, ...] = ()) -> list[str]:
-    return git(repo, "diff", "--name-only", *revs, "--", *paths).split()
+    return git(repo, "diff", "--name-only", "--no-renames", *revs, "--", *paths).split()
 
 
 def latest_release_tag() -> str | None:
@@ -53,6 +61,14 @@ def listing(paths: list[str]) -> str:
 def evaluate(repo: Path, base: str, head: str, release_tag: Callable[[], str | None]) -> Result:
     if PIN_FILE not in changed(repo, f"{base}...{head}"):
         return Result(True, f"not a LiteLLM bump ({PIN_FILE} unchanged)")
+
+    gate = changed(repo, f"{base}...{head}", paths=GATE_PATHS)
+    if gate:
+        return Result(
+            False,
+            f"this LiteLLM bump also changes the release gate. CI runs the gate from {base}, "
+            f"so land the gate change in its own PR first:\n{listing(gate)}",
+        )
 
     in_pr = changed(repo, f"{base}...{head}", paths=IMAGE_PATHS)
     if in_pr:
