@@ -124,11 +124,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--deployed-image", action="store_true", help="print the middleware image spruyt-labs deploys, then exit"
     )
-    parser.add_argument("--values-url", default=SPRUYT_LABS_VALUES_URL, help="spruyt-labs LiteLLM values.yaml")
     args = parser.parse_args(argv)
 
     if args.deployed_image:
-        print(deployed_image(fetch(args.values_url)))
+        print(deployed_image(fetch(SPRUYT_LABS_VALUES_URL)))
         return 0
     if not (args.base and args.head):
         parser.error("--base and --head are required")

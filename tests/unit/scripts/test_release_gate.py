@@ -300,14 +300,20 @@ def test_deployed_image_fails_closed_when_the_pin_is_not_found(gate, values):
         gate.deployed_image(values)
 
 
-def test_main_prints_the_deployed_image(gate, tmp_path, capsys):
+def test_main_prints_the_deployed_image(gate, tmp_path, capsys, monkeypatch):
     values = tmp_path / "values.yaml"
     values.write_text(SPRUYT_LABS_VALUES)
+    monkeypatch.setattr(gate, "SPRUYT_LABS_VALUES_URL", values.as_uri())
 
-    code = gate.main(["--deployed-image", "--values-url", values.as_uri()])
+    code = gate.main(["--deployed-image"])
 
     assert code == 0
     assert capsys.readouterr().out.strip() == f"ghcr.io/anthony-spruyt/litellm-middleware:1.0.0@{DIGEST}"
+
+
+def test_main_does_not_take_the_values_url_from_the_command_line(gate):
+    with pytest.raises(SystemExit):
+        gate.main(["--deployed-image", "--values-url", "https://example.invalid/values.yaml"])
 
 
 def test_main_still_requires_base_and_head_for_the_gate(gate):
