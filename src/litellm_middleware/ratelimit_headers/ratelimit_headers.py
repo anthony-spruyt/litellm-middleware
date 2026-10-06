@@ -9,8 +9,8 @@ _PREFIXED = "llm_provider-" + _UNIFIED
 
 
 class RatelimitHeadersMiddleware:
-    async def async_post_call_response_headers_hook(
-        self, data: dict, user_api_key_dict: Any, response: Any, request_headers=None, litellm_call_info=None
+    async def async_post_call_response_headers_hook(  # NOSONAR
+        self, data: dict, response: Any, **_
     ) -> dict[str, str] | None:
         headers = {**_from_upstream_response(data), **_from_hidden_params(response)}
         return headers or None
