@@ -167,7 +167,12 @@ def test_bump_fails_when_the_pr_itself_changes_the_image(gate, repo, path):
 
 @pytest.mark.parametrize(
     "path",
-    ["scripts/release_gate.py", ".github/workflows/release-gate.yaml", "tests/unit/scripts/test_release_gate.py"],
+    [
+        "scripts/release_gate.py",
+        ".github/workflows/release-gate.yaml",
+        "tests/unit/scripts/test_release_gate.py",
+        "tests/integration/conftest.py",
+    ],
 )
 def test_bump_fails_when_the_pr_also_changes_the_gate(gate, repo, path):
     repo.branch("bump")
@@ -256,6 +261,64 @@ def test_main_exits_nonzero_and_reports_the_failure(gate, repo, capsys):
 
     assert code == 1
     assert "::error::" in capsys.readouterr().out
+
+
+DIGEST = "sha256:" + "ab" * 32
+SPRUYT_LABS_VALUES = f"""\
+controllers:
+  litellm:
+    containers:
+      litellm:
+        image:
+          repository: ghcr.io/berriai/litellm-non_root
+          tag: v1.104.0@sha256:{"cd" * 32}
+persistence:
+  litellm-middleware:
+    type: image
+    image:
+      repository: ghcr.io/anthony-spruyt/litellm-middleware
+      tag: 1.0.0@{DIGEST}
+    pullPolicy: IfNotPresent
+"""
+
+
+def test_deployed_image_is_the_middleware_volume_spruyt_labs_pins(gate):
+    assert gate.deployed_image(SPRUYT_LABS_VALUES) == f"ghcr.io/anthony-spruyt/litellm-middleware:1.0.0@{DIGEST}"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        SPRUYT_LABS_VALUES.replace(f"1.0.0@{DIGEST}", "1.0.0"),
+        SPRUYT_LABS_VALUES.replace("anthony-spruyt/litellm-middleware", "anthony-spruyt/other"),
+        "",
+    ],
+    ids=["no-digest", "no-middleware-volume", "empty"],
+)
+def test_deployed_image_fails_closed_when_the_pin_is_not_found(gate, values):
+    with pytest.raises(ValueError, match="litellm-middleware"):
+        gate.deployed_image(values)
+
+
+def test_main_prints_the_deployed_image(gate, tmp_path, capsys, monkeypatch):
+    values = tmp_path / "values.yaml"
+    values.write_text(SPRUYT_LABS_VALUES)
+    monkeypatch.setattr(gate, "SPRUYT_LABS_VALUES_URL", values.as_uri())
+
+    code = gate.main(["--deployed-image"])
+
+    assert code == 0
+    assert capsys.readouterr().out.strip() == f"ghcr.io/anthony-spruyt/litellm-middleware:1.0.0@{DIGEST}"
+
+
+def test_main_does_not_take_the_values_url_from_the_command_line(gate):
+    with pytest.raises(SystemExit):
+        gate.main(["--deployed-image", "--values-url", "https://example.invalid/values.yaml"])
+
+
+def test_main_still_requires_base_and_head_for_the_gate(gate):
+    with pytest.raises(SystemExit):
+        gate.main([])
 
 
 def test_main_exits_zero_for_a_non_bump(gate, repo, capsys):
