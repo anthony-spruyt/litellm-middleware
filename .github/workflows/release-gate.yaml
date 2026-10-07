@@ -37,3 +37,32 @@ jobs:
           BASE_REF: "${{ github.base_ref }}"
           HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
         run: 'python3 "$RUNNER_TEMP/release_gate.py" --repo . --base "origin/$BASE_REF" --head "$HEAD_SHA"'
+      - name: "Detect a LiteLLM bump"
+        id: "bump"
+        env:
+          BASE_REF: "${{ github.base_ref }}"
+          HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
+        run: |
+          if git diff --quiet --no-renames "origin/$BASE_REF...$HEAD_SHA" -- litellm-image.yaml; then
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: "Resolve the middleware release spruyt-labs deploys"
+        id: "deployed"
+        if: "steps.bump.outputs.bump == 'true'"
+        run: |
+          image="$(python3 "$RUNNER_TEMP/release_gate.py" --deployed-image)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: "Setup uv"
+        if: "steps.bump.outputs.bump == 'true'"
+        uses: "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7" # v10.2.0
+        with:
+          cache-dependency-glob: "uv.lock"
+      - name: "Integration tests against the deployed middleware release"
+        if: "steps.bump.outputs.bump == 'true'"
+        env:
+          LITELLM_IT_PACKAGE_IMAGE: "${{ steps.deployed.outputs.image }}"
+        run: |
+          echo "::notice::testing the bump against $LITELLM_IT_PACKAGE_IMAGE"
+          uv run --frozen --no-build pytest tests/integration
