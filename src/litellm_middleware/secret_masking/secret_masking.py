@@ -233,9 +233,10 @@ class _Holdback:
 
 
 class SecretMaskingMiddleware:
-    def __init__(
+    def __init__(  # noqa: PLR0913 - keyword-only tuning knobs
         self,
         key: bytes,
+        *,
         ttl_seconds: float = 3600.0,
         max_calls: int = 10000,
         clean_cache_size: int = 4096,
@@ -712,7 +713,7 @@ class _StreamRestorer:
         self._checkpoint = (self.sse_buffer, self.decoder.getstate()[0], dict(self.hold.held))
         return out
 
-    def _process(self, chunk: Any) -> list:
+    def _process(self, chunk: Any) -> list:  # noqa: PLR0911 - one return per chunk shape
         if isinstance(chunk, (bytes, bytearray)):
             self.mode = "bytes"
             return self._sse(self.decoder.decode(bytes(chunk)))
@@ -802,22 +803,25 @@ class _StreamRestorer:
         kind = _kind(event)
         index = event.get("index")
         if kind == "content_block_delta" and isinstance(index, int):
-            delta = event.get("delta") or {}
-            field = _STREAM_DELTA_FIELDS.get(_kind(delta))
-            if field is None or not isinstance(delta.get(field), str):
-                return [event]
-            self.delta_types[index] = delta["type"]
-            text = self.hold.feed(index, delta[field])
-            if text == delta[field]:
-                return [event]
-            if not text:
-                return []
-            return [{**event, "delta": {**delta, field: text}}]
+            return self._delta_event(event, index)
         if kind == "content_block_stop" and index in self.hold.held:
             return [self._flush_event(index), event]
         if kind in ("message_delta", "message_stop"):
             return [*self._flush_all_events(), event]
         return [event]
+
+    def _delta_event(self, event: dict, index: int) -> list:
+        delta = event.get("delta") or {}
+        field = _STREAM_DELTA_FIELDS.get(_kind(delta))
+        if field is None or not isinstance(delta.get(field), str):
+            return [event]
+        self.delta_types[index] = delta["type"]
+        text = self.hold.feed(index, delta[field])
+        if text == delta[field]:
+            return [event]
+        if not text:
+            return []
+        return [{**event, "delta": {**delta, field: text}}]
 
     def _flush_all_events(self) -> list:
         # Copy the keys first; _flush_event pops from hold.held.

@@ -21,10 +21,11 @@ _NONCE_LEN = 12
 
 
 class SharedFakes:
-    def __init__(
+    def __init__(  # noqa: PLR0913 - keyword-only tuning knobs
         self,
         salt: bytes,
         client_factory: Callable[[], Any],
+        *,
         ttl_seconds: int = 3600,
         timeout: float = 0.5,
         write_timeout: float = 2.0,
