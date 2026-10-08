@@ -86,7 +86,7 @@ The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden
 
 `litellm-image.yaml` pins the LiteLLM image (tag and digest) the integration tests run against. Renovate tracks it through its `# renovate:` annotation, so a LiteLLM bump PR here runs the integration suite against the new version.
 
-spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `.github/renovate-overrides.json5`. It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
+spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `renovate-overrides.json5`. It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
 
 The bump PR's integration tests run against `main`'s source, but the cluster runs the released image. The required `Release Gate` check (`.github/workflows/release-gate.yaml`) closes that gap. It runs `scripts/release_gate.py` as it stands on `main`, not the PR's copy, and CODEOWNERS requires a code-owner review for changes to the gate's script, workflow and tests. A PR that renames, deletes or edits `litellm-image.yaml` counts as a bump, and the check fails it in three cases:
 
