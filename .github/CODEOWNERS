@@ -1,5 +1,0 @@
-# Protect CI/CD configuration from unauthorized changes
-.github/workflows/ @anthony-spruyt
-.github/actions/   @anthony-spruyt
-/scripts/release_gate.py                @anthony-spruyt
-/tests/unit/scripts/test_release_gate.py @anthony-spruyt
