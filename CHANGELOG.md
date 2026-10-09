@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.0.0...v1.0.1) (2026-10-09)
+
+
+### Code Refactoring
+
+* prepare for ruff PLR rules ([#33](https://github.com/anthony-spruyt/litellm-middleware/issues/33)) ([03839be](https://github.com/anthony-spruyt/litellm-middleware/commit/03839be85822ccbd53b6825fea3c23c88633b0f7))
+
 ## 1.0.0 (2026-10-06)
 
 
