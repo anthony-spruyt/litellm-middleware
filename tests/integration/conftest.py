@@ -22,7 +22,6 @@ CALLBACK = "litellm_middleware.pipeline_plugin.pipeline_middleware"
 MASTER_KEY = "it-master-key"
 MODEL = "claude-it"
 STARTUP_TIMEOUT_S = 240
-PACKAGE_IMAGE_ENV = "LITELLM_IT_PACKAGE_IMAGE"
 MCP_SERVER = "itmcp"
 MCP_PORT = 8098
 
@@ -47,22 +46,11 @@ def litellm_image() -> str:
     return yaml.safe_load((REPO_ROOT / "litellm-image.yaml").read_text())["image"]
 
 
-def package_build_context(scratch: Path) -> Path:
-    """The checkout, or a one-line Dockerfile re-exporting the released image named in PACKAGE_IMAGE_ENV."""
-    released = os.environ.get(PACKAGE_IMAGE_ENV)
-    if not released:
-        return REPO_ROOT
-    context = scratch / "released-package"
-    context.mkdir()
-    (context / "Dockerfile").write_text(f"FROM {released}\n")
-    return context
-
-
 def export_package_image(dest: Path) -> None:
     """Builds the package image and unpacks its filesystem, so tests see exactly what the image ships."""
     archive = dest.with_suffix(".tar")
     build = subprocess.run(
-        [_cli(), "build", "--output", f"type=tar,dest={archive}", str(package_build_context(dest.parent))],
+        [_cli(), "build", "--output", f"type=tar,dest={archive}", str(REPO_ROOT)],
         capture_output=True,
         text=True,
         check=False,
