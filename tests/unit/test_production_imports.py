@@ -39,6 +39,8 @@ def test_production_dotted_imports_resolve(production_import_shape):
         "litellm_middleware.secret_masking.shared_fakes",
         "litellm_middleware.secret_masking.secret_masking",
         "litellm_middleware.ratelimit_headers.ratelimit_headers",
+        "litellm_middleware.tool_guard.tool_results",
+        "litellm_middleware.tool_guard.tool_guard",
     ]
 
     for module in modules:
@@ -74,3 +76,17 @@ def test_production_pipeline_loads_ratelimit_headers(production_import_shape):
     restorer = importlib.import_module("litellm_middleware.ratelimit_headers.ratelimit_headers")
 
     assert restorer.ratelimit_headers in plugin.pipeline_middleware.middlewares
+
+
+def test_production_pipeline_loads_tool_guard(production_import_shape):
+    for module in [
+        "litellm_middleware.tool_guard.tool_guard",
+        "litellm_middleware.registry",
+        "litellm_middleware.pipeline_plugin",
+    ]:
+        sys.modules.pop(module, None)
+
+    plugin = importlib.import_module("litellm_middleware.pipeline_plugin")
+    guard = importlib.import_module("litellm_middleware.tool_guard.tool_guard")
+
+    assert guard.tool_guard in plugin.pipeline_middleware.middlewares
