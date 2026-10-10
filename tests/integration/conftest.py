@@ -26,6 +26,8 @@ OPENAI_MODEL = "gpt-it"
 GUARDED_KEY = "it-tool-guard-key"
 GUARDED_ALIAS = "it-tool-guard"
 SCANNER_PORT = 8097
+SCANNER_MAX_BODY_BYTES = 8192
+TOOL_GUARD_MAX_BATCH_BYTES = 4096
 STARTUP_TIMEOUT_S = 240
 MCP_SERVER = "itmcp"
 MCP_PORT = 8098
@@ -143,6 +145,10 @@ def proxy(package_files, tmp_path_factory):
                 f"TOOL_GUARD_URL=http://127.0.0.1:{SCANNER_PORT}",
                 "-e",
                 f"TOOL_GUARD_KEY_ALIASES={GUARDED_ALIAS}",
+                "-e",
+                f"TOOL_GUARD_MAX_BATCH_BYTES={TOOL_GUARD_MAX_BATCH_BYTES}",
+                "-e",
+                f"FAKE_SCANNER_MAX_BODY_BYTES={SCANNER_MAX_BODY_BYTES}",
                 "-e",
                 "ANTHROPIC_API_BASE=http://127.0.0.1:8099",
                 "-e",

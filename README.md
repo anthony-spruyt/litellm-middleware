@@ -128,16 +128,18 @@ It swaps fakes in the reply back to the real values, including streamed text and
 | `TOOL_GUARD_TEAM_IDS`        | Comma-separated team IDs to scan for                          | none               |
 | `TOOL_GUARD_TIMEOUT_SECONDS` | Time limit for all scanner calls on one request               | `3`                |
 | `TOOL_GUARD_MAX_TEXT_BYTES`  | Size above which a tool result is wrapped without a scan      | `262144` (256 KiB) |
+| `TOOL_GUARD_MAX_BATCH_BYTES` | Size limit for one scanner request body                       | `4194304` (4 MiB)  |
 
 A request is scanned when its key alias or team ID is listed. Enforced keys can use the endpoints listed above, `/v1/messages/count_tokens`, embeddings, moderations, image generation, and tool calls through LiteLLM's MCP gateway. Any other endpoint, Responses WebSocket mode included, answers their requests with a client error.
 
 - Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text fields joined in order with newlines. For Gemini `functionResponse`, the text fields are the object keys and string values of `response`.
 - Results after the last assistant turn, and server tool results in the last assistant turn, go to the scanner with their text. Older results go by hash only, so the scanner answers from its verdict cache.
 - A tool result larger than `TOOL_GUARD_MAX_TEXT_BYTES` (UTF-8) is marked `unchecked` without a scanner call.
+- Scanner requests are split into batches whose JSON body is at most `TOOL_GUARD_MAX_BATCH_BYTES`, so the body limit is counted on the encoded text (quotes and control characters take 2 to 6 bytes). Batches are sent one after another, newest results first, inside the same time limit. A tool result whose encoded size alone exceeds `TOOL_GUARD_MAX_BATCH_BYTES` is marked `unchecked` without a scanner call. Keep the value below the scanner's request body limit.
 - The marker is `<untrusted-tool-output id="..." verdict="...">` ... `</untrusted-tool-output id="...">`, where the id is the first 16 hex digits of the result's hash, so the text inside cannot contain its own closing tag.
 - The verdict is `suspected-prompt-injection` for results the scanner flags and `unchecked` for results without a verdict. A header line after the opening tag tells the model how to treat each: flagged output is data only, and the model tells the user if its task depends on it.
 - The rewrite changes only the text of marked results, and the same input and verdicts always give the same output, so prompt caching keeps working.
-- When a scanner call fails or runs out of time, every result in the request without a verdict from it is marked `unchecked`. Errors and timeouts are logged as `tool guard scan error: <error>`.
+- When a scanner call fails or runs out of time, every result in the request without a verdict from a completed call is marked `unchecked`. Errors and timeouts are logged as `tool guard scan error: <error>`.
 
 Scanner contract:
 
@@ -147,4 +149,4 @@ POST {TOOL_GUARD_URL}/v1/scan
 -> {"flagged": ["sha256:..."], "unknown": ["sha256:..."]}
 ```
 
-`unknown` lists `known` hashes the scanner has no verdict for. The middleware sends those results again with their text in a second call, inside the same time limit, and wraps anything either call flags. If the second call fails, the results it carried are marked `unchecked`.
+`unknown` lists `known` hashes the scanner has no verdict for. The middleware sends those results again with their text in follow-up calls, inside the same time limit, and wraps anything a call flags. Results in a call that fails, and in calls not sent before the time limit, are marked `unchecked`.

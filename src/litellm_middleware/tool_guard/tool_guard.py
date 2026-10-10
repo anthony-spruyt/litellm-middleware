@@ -10,10 +10,12 @@ from typing import Any
 from litellm._logging import verbose_proxy_logger
 
 from ..pipeline import MiddlewarePipeline
+from .batches import Batch, batches
 from .tool_results import FLAGGED, UNCHECKED, ToolResult, find, rewrite
 
 DEFAULT_TIMEOUT_SECONDS = 3.0
 DEFAULT_MAX_TEXT_BYTES = 256 * 1024
+DEFAULT_MAX_BATCH_BYTES = 4 * 1024 * 1024
 _log_warning = MiddlewarePipeline._log_warning
 _REJECTED = "This endpoint is not available for this key."
 _REJECTIONS = {
@@ -57,6 +59,7 @@ class ToolGuardMiddleware:
         team_ids: Iterable[str] = (),
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         max_text_bytes: int = DEFAULT_MAX_TEXT_BYTES,
+        max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
         client_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.url = url.rstrip("/") if url else None
@@ -64,6 +67,7 @@ class ToolGuardMiddleware:
         self.team_ids = frozenset(team_ids)
         self.timeout = timeout
         self.max_text_bytes = max_text_bytes
+        self.max_batch_bytes = max_batch_bytes
         self._factory = client_factory or _default_client
         self._client: Any = None
 
@@ -119,33 +123,40 @@ class ToolGuardMiddleware:
     async def _scan(self, results: list[ToolResult]) -> dict[str, str]:
         """Returns the verdict to mark each result hash with; results the scanner cleared are left out."""
         texts: dict[str, str] = {}
-        new: dict[str, str] = {}
-        for result in results:
+        for result in reversed(results):
             texts.setdefault(result.hash, result.text)
-            if result.new:
-                new.setdefault(result.hash, result.text)
+        new = {r.hash for r in results if r.new}
         known = [h for h in texts if h not in new]
         flagged: set[str] = set()
         unchecked = set(texts)
         try:
             async with asyncio.timeout(self.timeout):
-                hits, unknown = await self._post(new, known)
-                flagged.update(hits)
-                retry = {h: texts[h] for h in unknown if h in texts and h not in new}
-                unchecked = set(retry)
-                if retry:
-                    hits, _ = await self._post(retry, [])
-                    flagged.update(hits)
-                    unchecked = set()
+                first = batches(((h, texts[h]) for h in texts if h in new), known, self.max_batch_bytes)
+                unknown = set(await self._send(first, flagged, unchecked))
+                unchecked -= unknown & new
+                retry = [h for h in texts if h in unknown and h not in new]
+                follow_up = batches(((h, texts[h]) for h in retry), [], self.max_batch_bytes)
+                await self._send(follow_up, flagged, unchecked)
         except Exception as exc:  # noqa: BLE001
             _log_warning("tool guard scan error: %s", type(exc).__name__)
         verdicts = dict.fromkeys(unchecked, UNCHECKED)
         verdicts.update(dict.fromkeys(flagged, FLAGGED))
         return verdicts
 
-    async def _post(self, new: dict[str, str], known: list[str]) -> tuple[list[str], list[str]]:
-        payload = {"new": [{"hash": h, "text": t} for h, t in new.items()], "known": known}
-        response = await self._connection().post(f"{self.url}/v1/scan", json=payload)
+    async def _send(self, to_send: Iterable[Batch], flagged: set[str], unchecked: set[str]) -> list[str]:
+        """Posts each batch in turn; answered hashes leave unchecked, unknown ones stay until re-sent."""
+        unknown: list[str] = []
+        for batch in to_send:
+            hits, missing = await self._post(batch)
+            flagged.update(hits)
+            unknown.extend(missing)
+            unchecked.difference_update(set(batch.hashes) - set(missing))
+        return unknown
+
+    async def _post(self, batch: Batch) -> tuple[list[str], list[str]]:
+        response = await self._connection().post(
+            f"{self.url}/v1/scan", content=batch.body, headers={"content-type": "application/json"}
+        )
         response.raise_for_status()
         body = response.json()
         return _hashes(body["flagged"], "flagged"), _hashes(body.get("unknown", []), "unknown")
@@ -201,6 +212,7 @@ def tool_guard_from_env() -> ToolGuardMiddleware:
         team_ids=_csv("TOOL_GUARD_TEAM_IDS"),
         timeout=_positive_from_env("TOOL_GUARD_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS, float),
         max_text_bytes=_positive_from_env("TOOL_GUARD_MAX_TEXT_BYTES", DEFAULT_MAX_TEXT_BYTES, int),
+        max_batch_bytes=_positive_from_env("TOOL_GUARD_MAX_BATCH_BYTES", DEFAULT_MAX_BATCH_BYTES, int),
     )
 
 
