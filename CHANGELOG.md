@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.0.1...v1.1.0) (2026-10-10)
+
+
+### Features
+
+* **tool-guard:** mark scanner-flagged tool results as untrusted data ([28f9dff](https://github.com/anthony-spruyt/litellm-middleware/commit/28f9dff43e8e69a5a6a37d7c9961c40c541a3a68))
+* **tool-guard:** send scanner requests in size-bounded batches, newest first ([#52](https://github.com/anthony-spruyt/litellm-middleware/issues/52)) ([199f5fe](https://github.com/anthony-spruyt/litellm-middleware/commit/199f5fe61780e3b68558e595aa5127b9d803fe9b))
+
 ## [1.0.1](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.0.0...v1.0.1) (2026-10-09)
 
 
