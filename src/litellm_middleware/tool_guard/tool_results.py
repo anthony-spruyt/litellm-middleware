@@ -86,7 +86,7 @@ def rewrite(items: list, flagged: list[ToolResult]) -> list:
         if index not in copied:
             out[index] = copy.deepcopy(items[index])
             copied.add(index)
-        for owner, key, wrappable in list(_WALKERS[result.kind](_resolve(out, result.path), result.key)):
+        for owner, key, wrappable in _WALKERS[result.kind](_resolve(out, result.path), result.key):
             if wrappable:
                 owner[key] = wrap(owner[key], result.hash)
     return out
@@ -166,20 +166,27 @@ def _role(item: Any) -> Any:
 _Located = tuple[tuple[Any, ...], str, str, bool]
 
 
+def _dicts(value: Any) -> Iterator[tuple[int, dict]]:
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                yield index, item
+
+
+def _anthropic_server(role: Any, kind: Any) -> bool | None:
+    if role == "user" and kind == "tool_result":
+        return False
+    if role == "assistant" and isinstance(kind, str) and kind.endswith("_tool_result"):
+        return True
+    return None
+
+
 def _anthropic_results(messages: list) -> Iterator[_Located]:
-    for i, message in enumerate(messages):
-        role = _role(message)
-        content = message.get("content") if role in ("user", "assistant") else None
-        if not isinstance(content, list):
-            continue
-        for j, block in enumerate(content):
-            if not isinstance(block, dict) or "content" not in block:
-                continue
-            kind = block.get("type")
-            if role == "user" and kind == "tool_result":
-                yield (i, "content", j), "content", "content", False
-            elif role == "assistant" and isinstance(kind, str) and kind.endswith("_tool_result"):
-                yield (i, "content", j), "content", "content", True
+    for i, message in _dicts(messages):
+        for j, block in _dicts(message.get("content")):
+            server = _anthropic_server(message.get("role"), block.get("type"))
+            if server is not None and "content" in block:
+                yield (i, "content", j), "content", "content", server
 
 
 def _chat_results(messages: list) -> Iterator[_Located]:
@@ -200,13 +207,10 @@ def _responses_results(items: list) -> Iterator[_Located]:
 
 
 def _gemini_results(contents: list) -> Iterator[_Located]:
-    for i, content in enumerate(contents):
-        parts = content.get("parts") if isinstance(content, dict) else None
-        if not isinstance(parts, list):
-            continue
-        for j, part in enumerate(parts):
+    for i, content in _dicts(contents):
+        for j, part in _dicts(content.get("parts")):
             for name in _GEMINI_RESPONSE_KEYS:
-                response = part.get(name) if isinstance(part, dict) else None
+                response = part.get(name)
                 if isinstance(response, dict) and "response" in response:
                     yield (i, "parts", j, name), "response", "json", False
 
