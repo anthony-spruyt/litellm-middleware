@@ -4,7 +4,15 @@ import uuid
 
 import httpx
 import pytest
-from conftest import GUARDED_KEY, MASTER_KEY, MCP_SERVER, MODEL, OPENAI_MODEL
+from conftest import (
+    GUARDED_KEY,
+    MASTER_KEY,
+    MCP_SERVER,
+    MODEL,
+    OPENAI_MODEL,
+    SCANNER_MAX_BODY_BYTES,
+    TOOL_GUARD_MAX_BATCH_BYTES,
+)
 
 from litellm_middleware.tool_guard.tool_results import FLAGGED, UNCHECKED, content_hash, wrap
 
@@ -139,7 +147,7 @@ def test_scanner_gets_new_results_with_text_and_older_ones_by_hash(proxy):
 
     calls = proxy.scanner_received()[before:]
     assert len(calls) == 2
-    assert [item["text"] for item in calls[0]["new"]] == [f"{INJECTION} {nonce}\nsecond block", f"benign {nonce}"]
+    assert [item["text"] for item in calls[0]["new"]] == [f"benign {nonce}", f"{INJECTION} {nonce}\nsecond block"]
     assert calls[0]["known"] == [content_hash(f"old {nonce}")]
     assert all(h.startswith("sha256:") for h in [*calls[0]["known"], *(i["hash"] for i in calls[0]["new"])])
     assert calls[1] == {"new": [{"hash": content_hash(f"old {nonce}"), "text": f"old {nonce}"}], "known": []}
@@ -159,6 +167,38 @@ def test_known_flagged_result_stays_wrapped_on_the_next_turn(proxy):
 
     assert proxy.scanner_received()[before]["new"] == []
     assert _dumps(guarded["messages"]) == _dumps(_flag(later)["messages"])
+
+
+def _long_history(nonce: str) -> dict:
+    call = {"type": "function", "function": {"name": "Read", "arguments": "{}"}}
+    filler = "x" * 900
+    messages = [{"role": "system", "content": "SYSTEM"}, {"role": "user", "content": "read the files"}]
+    for i in range(10):
+        text = f"{INJECTION if i == 3 else 'old'} {i} {nonce} {filler}"
+        messages += [
+            {"role": "assistant", "tool_calls": [{"id": f"call_{i}", **call}]},
+            {"role": "tool", "tool_call_id": f"call_{i}", "content": text},
+        ]
+    messages += [
+        {"role": "assistant", "tool_calls": [{"id": "call_new", **call}]},
+        {"role": "tool", "tool_call_id": "call_new", "content": f"fine {nonce}"},
+    ]
+    return {"model": OPENAI_MODEL, "max_tokens": 64, "messages": messages}
+
+
+def test_history_larger_than_the_scanner_body_cap_is_scanned_in_batches(proxy):
+    body = _long_history(uuid.uuid4().hex)
+    before = len(proxy.scanner_received())
+
+    guarded = _send(proxy, "/v1/chat/completions", body, GUARDED_KEY)
+
+    calls = proxy.scanner_received()[before:]
+    rescanned = [item for call in calls[1:] for item in call["new"]]
+    assert sum(len(_dumps(item)) for item in rescanned) > SCANNER_MAX_BODY_BYTES
+    assert all(len(_dumps(call)) <= TOOL_GUARD_MAX_BATCH_BYTES for call in calls)
+    assert len(calls) >= 3
+    assert _dumps(guarded["messages"]) == _dumps(_flag(body)["messages"])
+    assert guarded["messages"] != body["messages"]
 
 
 def test_callers_not_enforced_skip_the_scanner(proxy):

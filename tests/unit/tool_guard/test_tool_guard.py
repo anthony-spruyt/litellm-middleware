@@ -58,16 +58,21 @@ def tr(mod):
 class Scanner:
     """Flags any text containing INJECTION and remembers verdicts, like the real scanner's cache."""
 
-    def __init__(self, status=200, body=None, delay=0.0):
+    def __init__(self, status=200, body=None, delay=0.0, max_body=None):
         self.requests = []
         self.status = status
         self.body = body
         self.delay = delay
+        self.max_body = max_body
+        self.rejected = 0
         self.verdicts = {}
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         self.requests.append((str(request.url), payload))
+        if self.max_body is not None and len(request.content) > self.max_body:
+            self.rejected += 1
+            return httpx.Response(413, content=b"too large")
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.body is not None:
@@ -1089,3 +1094,296 @@ async def test_default_client_waits_for_the_configured_time_limit(mod, tr):
         await guard._connection().aclose()
 
     assert out["messages"][5]["content"][0]["text"] == tr.wrap(INJECTION, _sha(INJECTION), tr.FLAGGED)
+
+
+def _tool_call(call_id):
+    return {"id": call_id, "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+
+
+def _chat_history(old, new):
+    """Chat data whose older tool results are texts in old and latest-turn ones texts in new, both oldest first."""
+    messages = [{"role": "user", "content": "go"}]
+    for i, text in enumerate(old):
+        messages += [
+            {"role": "assistant", "content": None, "tool_calls": [_tool_call(f"o{i}")]},
+            {"role": "tool", "tool_call_id": f"o{i}", "content": text},
+        ]
+    calls = [_tool_call(f"n{i}") for i in range(len(new))]
+    messages.append({"role": "assistant", "content": None, "tool_calls": calls})
+    messages += [{"role": "tool", "tool_call_id": f"n{i}", "content": text} for i, text in enumerate(new)]
+    return {"litellm_call_id": "call-1", "messages": messages}
+
+
+def _item(text):
+    return {"hash": _sha(text), "text": text}
+
+
+def _body_size(*texts, known=()):
+    payload = {"new": [_item(t) for t in texts], "known": [_sha(t) for t in known]}
+    return len(httpx.Request("POST", SCANNER, json=payload).content)
+
+
+def _tool_contents(out):
+    return [m["content"] for m in out["messages"] if m["role"] == "tool"]
+
+
+def _texts(n, prefix, size=60, marked=()):
+    return [(INJECTION if i in marked else "") + f"{prefix}{i}-" + "x" * size for i in range(n)]
+
+
+async def test_new_results_are_sent_in_size_bounded_batches_newest_first(mod, tr):
+    scanner = Scanner()
+    new = _texts(4, "new", marked={0, 3})
+    limit = _body_size(new[3], new[2])
+
+    out = await _run(_guard(mod, scanner, max_batch_bytes=limit), _chat_history([], new), "acompletion")
+
+    assert [p for _, p in scanner.requests] == [
+        {"new": [_item(new[3]), _item(new[2])], "known": []},
+        {"new": [_item(new[1]), _item(new[0])], "known": []},
+    ]
+    assert _tool_contents(out) == [
+        tr.wrap(new[0], _sha(new[0]), tr.FLAGGED),
+        new[1],
+        new[2],
+        tr.wrap(new[3], _sha(new[3]), tr.FLAGGED),
+    ]
+
+
+async def test_known_hashes_ride_in_the_batches_after_the_new_results(mod):
+    scanner = Scanner()
+    new = _texts(2, "new")
+    old = _texts(3, "old")
+    for text in old:
+        scanner.verdicts[_sha(text)] = False
+    limit = _body_size(new[1], new[0], known=old[2:])
+
+    await _run(_guard(mod, scanner, max_batch_bytes=limit), _chat_history(old, new), "acompletion")
+
+    assert [p for _, p in scanner.requests] == [
+        {"new": [_item(new[1]), _item(new[0])], "known": [_sha(old[2])]},
+        {"new": [], "known": [_sha(old[1]), _sha(old[0])]},
+    ]
+
+
+async def test_unknown_results_are_rescanned_in_batches_newest_first(mod, tr):
+    scanner = Scanner()
+    old = _texts(4, "old", size=200, marked={1})
+    new = ["fine"]
+    limit = _body_size(old[1], old[0])
+
+    out = await _run(_guard(mod, scanner, max_batch_bytes=limit), _chat_history(old, new), "acompletion")
+
+    assert [p for _, p in scanner.requests] == [
+        {"new": [_item("fine")], "known": [_sha(t) for t in reversed(old)]},
+        {"new": [_item(old[3]), _item(old[2])], "known": []},
+        {"new": [_item(old[1]), _item(old[0])], "known": []},
+    ]
+    assert _tool_contents(out) == [
+        old[0],
+        tr.wrap(old[1], _sha(old[1]), tr.FLAGGED),
+        old[2],
+        old[3],
+        "fine",
+    ]
+
+
+async def test_unknown_hashes_from_every_batch_are_rescanned(mod, tr):
+    scanner = Scanner()
+    old = _texts(6, "old", size=60, marked={0, 5})
+    new = ["fine"]
+    limit = _body_size(old[5])
+
+    out = await _run(_guard(mod, scanner, max_batch_bytes=limit), _chat_history(old, new), "acompletion")
+
+    sent_known = [h for _, p in scanner.requests for h in p["known"]]
+    assert sent_known == [_sha(t) for t in reversed(old)]
+    rescanned = [i["text"] for _, p in scanner.requests for i in p["new"] if i["text"] != "fine"]
+    assert rescanned == list(reversed(old))
+    assert _tool_contents(out)[0] == tr.wrap(old[0], _sha(old[0]), tr.FLAGGED)
+    assert _tool_contents(out)[5] == tr.wrap(old[5], _sha(old[5]), tr.FLAGGED)
+    assert _tool_contents(out)[1:5] == old[1:5]
+
+
+async def test_session_history_larger_than_the_scanner_body_cap_is_still_scanned(mod, tr):
+    old = _texts(12, "old", size=300, marked={2, 9})
+    new = _texts(3, "new", size=300, marked={1})
+    cap = _body_size(old[0], old[1], old[2])
+    scanner = Scanner(max_body=cap)
+
+    out = await _run(_guard(mod, scanner, max_batch_bytes=cap), _chat_history(old, new), "acompletion")
+
+    assert scanner.rejected == 0
+    assert len(scanner.requests) > 4
+    expected = [tr.wrap(t, _sha(t), tr.FLAGGED) if INJECTION in t else t for t in [*old, *new]]
+    assert _tool_contents(out) == expected
+
+
+async def test_batches_are_sent_one_after_another(mod):
+    active = 0
+    peak = 0
+
+    async def handle(request):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return httpx.Response(200, json={"flagged": [], "unknown": []})
+
+    guard = mod.ToolGuardMiddleware(
+        SCANNER,
+        key_aliases={"guarded"},
+        max_batch_bytes=_body_size(_texts(1, "new")[0]),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+
+    await _run(guard, _chat_history([], _texts(4, "new")), "acompletion")
+
+    assert peak == 1
+
+
+async def test_batches_the_budget_ran_out_before_leave_their_results_unchecked(mod, tr):
+    scanner = Scanner(delay=0.15)
+    new = _texts(3, "new", marked={2})
+    limit = _body_size(new[2])
+
+    out = await _run(_guard(mod, scanner, max_batch_bytes=limit, timeout=0.25), _chat_history([], new), "acompletion")
+
+    assert len(scanner.requests) == 2
+    assert _tool_contents(out) == [
+        tr.wrap(new[0], _sha(new[0]), tr.UNCHECKED),
+        tr.wrap(new[1], _sha(new[1]), tr.UNCHECKED),
+        tr.wrap(new[2], _sha(new[2]), tr.FLAGGED),
+    ]
+
+
+async def test_budget_running_out_during_the_follow_up_keeps_earlier_verdicts(mod, tr):
+    scanner = Scanner(delay=0.1)
+    old = _texts(2, "old", size=200, marked={1})
+    limit = _body_size(old[1])
+
+    out = await _run(
+        _guard(mod, scanner, max_batch_bytes=limit, timeout=0.25), _chat_history(old, ["fine"]), "acompletion"
+    )
+
+    assert _tool_contents(out) == [
+        tr.wrap(old[0], _sha(old[0]), tr.UNCHECKED),
+        tr.wrap(old[1], _sha(old[1]), tr.FLAGGED),
+        "fine",
+    ]
+
+
+async def test_failed_batch_marks_only_its_own_results_unchecked(mod, tr, fake_litellm):
+    calls = []
+
+    def handle(request):
+        calls.append(json.loads(request.content))
+        if len(calls) == 2:
+            return httpx.Response(503, content=b"down")
+        flagged = [i["hash"] for i in calls[-1]["new"] if INJECTION in i["text"]]
+        return httpx.Response(200, json={"flagged": flagged, "unknown": []})
+
+    new = _texts(3, "new", marked={2})
+    guard = mod.ToolGuardMiddleware(
+        SCANNER,
+        key_aliases={"guarded"},
+        max_batch_bytes=_body_size(new[2]),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+
+    out = await _run(guard, _chat_history([], new), "acompletion")
+
+    assert len(calls) == 2
+    assert _tool_contents(out) == [
+        tr.wrap(new[0], _sha(new[0]), tr.UNCHECKED),
+        tr.wrap(new[1], _sha(new[1]), tr.UNCHECKED),
+        tr.wrap(new[2], _sha(new[2]), tr.FLAGGED),
+    ]
+    assert fake_litellm.verbose_proxy_logger.warnings
+
+
+async def test_unknown_hash_stays_unchecked_when_a_later_batch_fails(mod, tr):
+    old = _texts(2, "old")
+    calls = []
+
+    def handle(request):
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            return httpx.Response(200, json={"flagged": [], "unknown": [_sha(old[1])]})
+        return httpx.Response(503, content=b"down")
+
+    guard = mod.ToolGuardMiddleware(
+        SCANNER,
+        key_aliases={"guarded"},
+        max_batch_bytes=_body_size("fine", known=[old[1]]),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+
+    out = await _run(guard, _chat_history(old, ["fine"]), "acompletion")
+
+    assert len(calls) == 2
+    assert _tool_contents(out) == [
+        tr.wrap(old[0], _sha(old[0]), tr.UNCHECKED),
+        tr.wrap(old[1], _sha(old[1]), tr.UNCHECKED),
+        "fine",
+    ]
+
+
+async def test_result_too_big_for_a_batch_is_unchecked_without_being_sent(mod, tr):
+    scanner = Scanner()
+    big = INJECTION + "y" * 500
+    small = _texts(2, "new")
+    limit = _body_size(small[0], small[1])
+
+    out = await _run(
+        _guard(mod, scanner, max_batch_bytes=limit), _chat_history([], [small[0], big, small[1]]), "acompletion"
+    )
+
+    assert [p for _, p in scanner.requests] == [{"new": [_item(small[1]), _item(small[0])], "known": []}]
+    assert _tool_contents(out) == [small[0], tr.wrap(big, _sha(big), tr.UNCHECKED), small[1]]
+
+
+async def test_only_results_too_big_for_a_batch_make_no_scanner_call(mod, tr):
+    scanner = Scanner()
+    new = _texts(2, "new", size=500)
+
+    out = await _run(_guard(mod, scanner, max_batch_bytes=100), _chat_history([], new), "acompletion")
+
+    assert scanner.requests == []
+    assert _tool_contents(out) == [tr.wrap(t, _sha(t), tr.UNCHECKED) for t in new]
+
+
+async def test_escape_heavy_results_batch_by_encoded_size(mod):
+    scanner = Scanner()
+    plain = ["p" * 200 + str(i) for i in range(3)]
+    quotes = ['"' * 200 + str(i) for i in range(3)]
+    limit = _body_size(*plain)
+
+    await _run(_guard(mod, scanner, max_batch_bytes=limit), _chat_history([], plain), "acompletion")
+    plain_calls = len(scanner.requests)
+    await _run(_guard(mod, scanner, max_batch_bytes=limit), _chat_history([], quotes), "acompletion")
+
+    assert plain_calls == 1
+    assert len(scanner.requests) - plain_calls > 1
+
+
+def test_from_env_defaults_max_batch_bytes(mod, monkeypatch):
+    monkeypatch.delenv("TOOL_GUARD_MAX_BATCH_BYTES", raising=False)
+
+    assert mod.DEFAULT_MAX_BATCH_BYTES == 4 * 1024 * 1024
+    assert mod.tool_guard_from_env().max_batch_bytes == 4 * 1024 * 1024
+
+
+def test_from_env_reads_max_batch_bytes(mod, monkeypatch):
+    monkeypatch.setenv("TOOL_GUARD_MAX_BATCH_BYTES", "65536")
+
+    assert mod.tool_guard_from_env().max_batch_bytes == 65536
+
+
+@pytest.mark.parametrize("raw", ["big", "0", "-5", "1.5"])
+def test_from_env_bad_max_batch_bytes_uses_default(mod, monkeypatch, fake_litellm, raw):
+    monkeypatch.setenv("TOOL_GUARD_MAX_BATCH_BYTES", raw)
+
+    assert mod.tool_guard_from_env().max_batch_bytes == mod.DEFAULT_MAX_BATCH_BYTES
+    assert fake_litellm.verbose_proxy_logger.warnings
