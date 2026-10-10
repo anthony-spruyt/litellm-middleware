@@ -56,6 +56,7 @@ def test_default_specs_point_at_per_middleware_packages(registry_module):
     assert modules == {
         "secret-masking": "litellm_middleware.secret_masking.secret_masking",
         "ratelimit-headers": "litellm_middleware.ratelimit_headers.ratelimit_headers",
+        "tool-guard": "litellm_middleware.tool_guard.tool_guard",
     }
 
 
@@ -63,3 +64,15 @@ def test_ratelimit_headers_is_optional(registry_module):
     spec = next(s for s in registry_module.DEFAULT_MIDDLEWARE_SPECS if s.name == "ratelimit-headers")
 
     assert not spec.required
+
+
+def test_tool_guard_is_optional(registry_module):
+    spec = next(s for s in registry_module.DEFAULT_MIDDLEWARE_SPECS if s.name == "tool-guard")
+
+    assert not spec.required
+
+
+def test_tool_guard_runs_after_secret_masking(registry_module):
+    names = [s.name for s in registry_module.DEFAULT_MIDDLEWARE_SPECS]
+
+    assert names.index("tool-guard") > names.index("secret-masking")

@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 RATELIMIT_HEADERS = {
@@ -58,6 +59,23 @@ def _events(model, text):
     yield "message_stop", {"type": "message_stop"}
 
 
+def _chat_completion(model, text):
+    return {
+        "id": "chatcmpl-it",
+        "object": "chat.completion",
+        "created": 0,
+        "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+    }
+
+
+def _chat_chunks(model, text):
+    base = {"id": "chatcmpl-it", "object": "chat.completion.chunk", "created": 0, "model": model}
+    yield {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}]}
+    yield {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -81,6 +99,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._stream(body["model"], text)
             else:
                 self._json(200, _message(body["model"], text), RATELIMIT_HEADERS)
+        elif self.path.startswith("/v1/chat/completions"):
+            if body.get("stream"):
+                frames = [f"data: {json.dumps(c)}\n\n" for c in _chat_chunks(body["model"], "ok")]
+                self._sse([*frames, "data: [DONE]\n\n"])
+            else:
+                self._json(200, _chat_completion(body["model"], "ok"))
         else:
             self._json(404, {})
 
@@ -95,18 +119,29 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _stream(self, model, text):
+        frames = [f"event: {event}\ndata: {json.dumps(payload)}\n\n" for event, payload in _events(model, text)]
+        self._sse(frames, RATELIMIT_HEADERS)
+
+    def _sse(self, frames, headers=None):
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("transfer-encoding", "chunked")
-        for key, value in RATELIMIT_HEADERS.items():
+        for key, value in (headers or {}).items():
             self.send_header(key, value)
         self.end_headers()
-        for event, payload in _events(model, text):
-            frame = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+        for text in frames:
+            frame = text.encode()
             self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
             self.wfile.flush()
         self.wfile.write(b"0\r\n\r\n")
 
 
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # LiteLLM opens and drops a connection to an OpenAI-format api_base at startup.
+        if not isinstance(sys.exc_info()[1], ConnectionResetError):
+            super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("FAKE_UPSTREAM_PORT", "8099"))), Handler).serve_forever()
+    Server(("127.0.0.1", int(os.environ.get("FAKE_UPSTREAM_PORT", "8099"))), Handler).serve_forever()

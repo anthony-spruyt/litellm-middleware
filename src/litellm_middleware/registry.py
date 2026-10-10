@@ -23,6 +23,8 @@ DEFAULT_MIDDLEWARE_SPECS: tuple[MiddlewareSpec, ...] = (
         "ratelimit_headers",
         required=False,
     ),
+    # After secret-masking, so the scanner only ever sees masked text.
+    MiddlewareSpec("tool-guard", "litellm_middleware.tool_guard.tool_guard", "tool_guard", required=False),
 )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import socket
@@ -21,6 +22,10 @@ MOUNT_PATH = "/opt/litellm-middleware"
 CALLBACK = "litellm_middleware.pipeline_plugin.pipeline_middleware"
 MASTER_KEY = "it-master-key"
 MODEL = "claude-it"
+OPENAI_MODEL = "gpt-it"
+GUARDED_KEY = "it-tool-guard-key"
+GUARDED_ALIAS = "it-tool-guard"
+SCANNER_PORT = 8097
 STARTUP_TIMEOUT_S = 240
 MCP_SERVER = "itmcp"
 MCP_PORT = 8098
@@ -77,10 +82,24 @@ def _config() -> str:
                         "api_base": "http://127.0.0.1:8099",
                         "api_key": "it",
                     },
-                }
+                },
+                {
+                    "model_name": OPENAI_MODEL,
+                    "litellm_params": {
+                        "model": f"openai/{OPENAI_MODEL}",
+                        "api_base": "http://127.0.0.1:8099/v1",
+                        "api_key": "it",
+                    },
+                },
             ],
             "litellm_settings": {"callbacks": [CALLBACK]},
-            "general_settings": {"include_call_id_in_error_body": True, "master_key": MASTER_KEY},
+            "general_settings": {
+                "include_call_id_in_error_body": True,
+                "master_key": MASTER_KEY,
+                # Gives GUARDED_KEY a key alias without a database; other keys fall through to the master key.
+                "custom_auth": "fake_auth.user_api_key_auth",
+                "custom_auth_settings": {"mode": "auto"},
+            },
             # Down at startup so the proxy's tool mapping stays cold, like a DB-loaded server after a restart.
             "mcp_servers": {MCP_SERVER: {"url": f"http://127.0.0.1:{MCP_PORT}/mcp", "transport": "http"}},
         }
@@ -99,7 +118,7 @@ def package_files(tmp_path_factory) -> Path:
 def proxy(package_files, tmp_path_factory):
     work = tmp_path_factory.mktemp("litellm-it")
     (work / "config.yaml").write_text(_config())
-    for fake in ("fake_upstream.py", "fake_mcp.py"):
+    for fake in ("fake_upstream.py", "fake_mcp.py", "fake_scanner.py", "fake_auth.py"):
         (work / fake).write_bytes((HERE / fake).read_bytes())
     _world_readable(work)
 
@@ -118,6 +137,10 @@ def proxy(package_files, tmp_path_factory):
                 f"127.0.0.1:{port}:{port}",
                 "-e",
                 f"PYTHONPATH={MOUNT_PATH}",
+                "-e",
+                f"TOOL_GUARD_URL=http://127.0.0.1:{SCANNER_PORT}",
+                "-e",
+                f"TOOL_GUARD_KEY_ALIASES={GUARDED_ALIAS}",
                 "-v",
                 f"{package_files}:{MOUNT_PATH}:ro",
                 "-v",
@@ -126,11 +149,16 @@ def proxy(package_files, tmp_path_factory):
                 f"{work / 'fake_upstream.py'}:/it/fake_upstream.py:ro",
                 "-v",
                 f"{work / 'fake_mcp.py'}:/it/fake_mcp.py:ro",
+                "-v",
+                f"{work / 'fake_scanner.py'}:/it/fake_scanner.py:ro",
+                "-v",
+                f"{work / 'fake_auth.py'}:/app/fake_auth.py:ro",
                 "--entrypoint",
                 "sh",
                 litellm_image(),
                 "-c",
-                f"python /it/fake_upstream.py & exec litellm --config /app/config.yaml --port {port}",
+                "python /it/fake_upstream.py & python /it/fake_scanner.py & "
+                f"exec litellm --config /app/config.yaml --port {port}",
             ],
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -193,9 +221,16 @@ class Proxy:
             time.sleep(1)
 
     def upstream_received(self) -> list[dict]:
-        # The fake upstream only listens inside the container.
-        return yaml.safe_load(
+        return self._fake_received(8099)
+
+    def scanner_received(self) -> list[dict]:
+        return self._fake_received(SCANNER_PORT)
+
+    def _fake_received(self, port: int) -> list[dict]:
+        # The fakes only listen inside the container.
+        return json.loads(
             self.python(
-                "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8099/_received').read().decode())"
+                "import urllib.request; "
+                f"print(urllib.request.urlopen('http://127.0.0.1:{port}/_received').read().decode())"
             )
         )
