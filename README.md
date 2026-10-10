@@ -114,21 +114,29 @@ It swaps fakes in the reply back to the real values, including streamed text and
 
 ## Tool guard
 
-`tool_guard/` sends tool results to a scanner before the request goes upstream, and wraps each one the scanner flags in a fixed marker that tells the model the text is tool data, not instructions. It covers `/v1/messages` (`tool_result` blocks), `/v1/chat/completions` (`role: tool` messages) and `/v1/responses` (`function_call_output` and `custom_tool_call_output` items). It runs after `secret-masking`, so the scanner only sees masked text.
+`tool_guard/` sends tool results to a scanner before the request goes upstream, and wraps each one the scanner flags in a marker that tells the model the text is tool data, not instructions. It runs after `secret-masking`, so the scanner only sees masked text. It reads tool results from:
 
-| Variable                     | Purpose                                                     | Default |
-| ---------------------------- | ----------------------------------------------------------- | ------- |
-| `TOOL_GUARD_URL`             | Scanner base URL. Unset turns the middleware off            | unset   |
-| `TOOL_GUARD_KEY_ALIASES`     | Comma-separated virtual key aliases to scan for             | none    |
-| `TOOL_GUARD_TEAM_IDS`        | Comma-separated team IDs to scan for                        | none    |
-| `TOOL_GUARD_TIMEOUT_SECONDS` | Time limit for one scanner call                             | `3`     |
+- `/v1/messages`: `tool_result` blocks in user turns, including nested `document` and `search_result` blocks, and server tool results (`web_fetch_tool_result`, `mcp_tool_result` and other `*_tool_result` blocks) in assistant turns
+- `/v1/chat/completions`: `role: tool` and `role: function` messages
+- `/v1/responses`, including compaction and WebSocket mode: `function_call_output`, `custom_tool_call_output`, shell and patch call outputs, and `mcp_call` output
+- Gemini `generateContent`: `functionResponse` parts
+
+| Variable                     | Purpose                                                       | Default            |
+| ---------------------------- | ------------------------------------------------------------- | ------------------ |
+| `TOOL_GUARD_URL`             | Scanner base URL. Unset turns the middleware off              | unset              |
+| `TOOL_GUARD_KEY_ALIASES`     | Comma-separated virtual key aliases to scan for               | none               |
+| `TOOL_GUARD_TEAM_IDS`        | Comma-separated team IDs to scan for                          | none               |
+| `TOOL_GUARD_TIMEOUT_SECONDS` | Time limit for all scanner calls on one request               | `3`                |
+| `TOOL_GUARD_MAX_TEXT_BYTES`  | Size above which a tool result is wrapped without a scan      | `262144` (256 KiB) |
 
 A request is scanned when its key alias or team ID is listed.
 
-- Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text parts joined in order. Images and other non-text parts are not hashed or changed.
-- Results after the last assistant turn go to the scanner with their text. Older results go by hash only, so the scanner answers from its verdict cache.
-- The rewrite changes only the text of flagged results. Every other field (`cache_control`, `is_error`, tool IDs, block order, other messages) is passed through unchanged, and the same input always gives the same output, so prompt caching keeps working.
-- Scanner errors and timeouts are logged as `tool guard scan failed open: <error>`.
+- Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text fields joined in order with newlines.
+- Results after the last assistant turn, and server tool results in the last assistant turn, go to the scanner with their text. Older results go by hash only, so the scanner answers from its verdict cache.
+- A tool result larger than `TOOL_GUARD_MAX_TEXT_BYTES` (UTF-8) is wrapped without a scanner call.
+- The marker is `<untrusted-tool-output id="...">` ... `</untrusted-tool-output id="...">`, where the id is the first 16 hex digits of the result's hash, so the text inside cannot contain its own closing tag.
+- The rewrite changes only the text of flagged results, and the same input always gives the same output, so prompt caching keeps working.
+- Scanner errors and timeouts are logged as `tool guard scan error: <error>`.
 
 Scanner contract:
 
@@ -138,4 +146,4 @@ POST {TOOL_GUARD_URL}/v1/scan
 -> {"flagged": ["sha256:..."], "unknown": ["sha256:..."]}
 ```
 
-`unknown` lists `known` hashes the scanner has no verdict for; those results are left as they are.
+`unknown` lists `known` hashes the scanner has no verdict for. The middleware sends those results again with their text in a second call, inside the same time limit, and wraps anything either call flags.
