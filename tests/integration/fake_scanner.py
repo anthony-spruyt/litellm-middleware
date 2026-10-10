@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MARKER = "IGNORE PREVIOUS INSTRUCTIONS"
 FAIL = "SCANNER-FAILS-ON-THIS"
+MAX_BODY_BYTES = int(os.environ.get("FAKE_SCANNER_MAX_BODY_BYTES", "0"))
 received = []
 verdicts = {}
 
@@ -26,7 +27,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/scan":
             self._json(404, {})
             return
-        body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+        raw = self.rfile.read(int(self.headers.get("content-length", 0)))
+        if MAX_BODY_BYTES and len(raw) > MAX_BODY_BYTES:
+            self._json(413, {"error": "request body too large"})
+            return
+        body = json.loads(raw or b"{}")
         received.append(body)
         if any(FAIL in item["text"] for item in body["new"]):
             self._json(503, {"error": "scanner down"})
