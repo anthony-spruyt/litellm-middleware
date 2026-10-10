@@ -23,7 +23,8 @@ class Batch:
         return b'{"new":[' + b",".join(self.new) + b'],"known":[' + b",".join(self.known) + b"]}"
 
     def growth(self, fragment: bytes, is_new: bool) -> int:
-        return len(fragment) + (1 if (self.new if is_new else self.known) else 0)
+        siblings = self.new if is_new else self.known
+        return len(fragment) + (1 if siblings else 0)
 
     def add(self, digest: str, fragment: bytes, is_new: bool) -> None:
         self.size += self.growth(fragment, is_new)
