@@ -5,6 +5,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MARKER = "IGNORE PREVIOUS INSTRUCTIONS"
+FAIL = "SCANNER-FAILS-ON-THIS"
 received = []
 verdicts = {}
 
@@ -27,6 +28,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
         received.append(body)
+        if any(FAIL in item["text"] for item in body["new"]):
+            self._json(503, {"error": "scanner down"})
+            return
         for item in body["new"]:
             verdicts[item["hash"]] = MARKER in item["text"]
         flagged = [i["hash"] for i in body["new"] if verdicts[i["hash"]]]

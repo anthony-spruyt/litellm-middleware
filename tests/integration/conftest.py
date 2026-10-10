@@ -101,7 +101,9 @@ def _config() -> str:
                 "custom_auth_settings": {"mode": "auto"},
             },
             # Down at startup so the proxy's tool mapping stays cold, like a DB-loaded server after a restart.
-            "mcp_servers": {MCP_SERVER: {"url": f"http://127.0.0.1:{MCP_PORT}/mcp", "transport": "http"}},
+            "mcp_servers": {
+                MCP_SERVER: {"url": f"http://127.0.0.1:{MCP_PORT}/mcp", "transport": "http", "allow_all_keys": True}
+            },
         }
     )
 
@@ -141,6 +143,10 @@ def proxy(package_files, tmp_path_factory):
                 f"TOOL_GUARD_URL=http://127.0.0.1:{SCANNER_PORT}",
                 "-e",
                 f"TOOL_GUARD_KEY_ALIASES={GUARDED_ALIAS}",
+                "-e",
+                "ANTHROPIC_API_BASE=http://127.0.0.1:8099",
+                "-e",
+                "ANTHROPIC_API_KEY=it",
                 "-v",
                 f"{package_files}:{MOUNT_PATH}:ro",
                 "-v",

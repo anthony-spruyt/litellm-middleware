@@ -1,4 +1,4 @@
-"""Asks a scanner which tool results look like prompt injection and marks those as untrusted data."""
+"""Asks a scanner which tool results look like prompt injection and marks those, and any left unchecked, untrusted."""
 
 from __future__ import annotations
 
@@ -10,13 +10,27 @@ from typing import Any
 from litellm._logging import verbose_proxy_logger
 
 from ..pipeline import MiddlewarePipeline
-from .tool_results import ToolResult, find, rewrite
+from .tool_results import FLAGGED, UNCHECKED, ToolResult, find, rewrite
 
 DEFAULT_TIMEOUT_SECONDS = 3.0
 DEFAULT_MAX_TEXT_BYTES = 256 * 1024
 _log_warning = MiddlewarePipeline._log_warning
-_WEBSOCKET_CALL_TYPE = "_aresponses_websocket"
-_WEBSOCKET_REJECTED = "Responses WebSocket mode is not available for this key; use the HTTP Responses API."
+_REJECTED = "This endpoint is not available for this key."
+_REJECTIONS = {
+    "_aresponses_websocket": "Responses WebSocket mode is not available for this key; use the HTTP Responses API.",
+}
+# Bodies that never carry tool results into a model; enforced keys get any other unscanned call type rejected.
+_TOOL_FREE_CALL_TYPES = frozenset(
+    {
+        "embedding",
+        "aembedding",
+        "moderation",
+        "amoderation",
+        "image_generation",
+        "aimage_generation",
+        "call_mcp_tool",
+    }
+)
 _CALL_TYPES = {
     "anthropic_messages": ("messages", "anthropic"),
     "acompletion": ("messages", "chat"),
@@ -27,6 +41,11 @@ _CALL_TYPES = {
     "agenerate_content": ("contents", "gemini"),
     "agenerate_content_stream": ("contents", "gemini"),
 }
+
+
+class UnsupportedCallTypeError(ValueError):
+    # LiteLLM reads status_code off pre-call exceptions to pick the HTTP status.
+    status_code = 400
 
 
 class ToolGuardMiddleware:
@@ -56,11 +75,11 @@ class ToolGuardMiddleware:
     async def async_pre_call_hook(self, user_api_key_dict, _cache, data: dict, call_type: str):  # NOSONAR
         if not self.enabled or not self._enforced(user_api_key_dict):
             return data
-        if call_type == _WEBSOCKET_CALL_TYPE:
-            return ValueError(_WEBSOCKET_REJECTED)
         target = _CALL_TYPES.get(call_type)
         if target is None:
-            return data
+            if call_type in _TOOL_FREE_CALL_TYPES:
+                return data
+            return UnsupportedCallTypeError(_REJECTIONS.get(call_type, _REJECTED))
         field, fmt = target
         value = data.get(field)
         guarded = await self._guard(value, fmt)
@@ -76,11 +95,18 @@ class ToolGuardMiddleware:
             return items
         oversized = {r.hash for r in results if len(r.text.encode("utf-8", "surrogatepass")) > self.max_text_bytes}
         scannable = [r for r in results if r.hash not in oversized]
-        flagged = await self._scan(scannable) if scannable else frozenset()
-        hits = [r for r in results if r.hash in flagged or r.hash in oversized]
-        marked = [r for r in hits if r.wrappable]
+        verdicts = await self._scan(scannable) if scannable else {}
+        verdicts.update(dict.fromkeys(oversized, UNCHECKED))
+        hits = [r for r in results if r.hash in verdicts]
+        marked = [(r, verdicts[r.hash]) for r in hits if r.wrappable]
         if hits:
-            _log_info("tool guard flagged %d tool result(s), marked %d as untrusted", len(hits), len(marked))
+            flagged = sum(verdicts[r.hash] == FLAGGED for r in hits)
+            _log_info(
+                "tool guard flagged %d and could not check %d tool result(s), marked %d",
+                flagged,
+                len(hits) - flagged,
+                len(marked),
+            )
         return rewrite(items, marked) if marked else items
 
     def _enforced(self, user_api_key_dict: Any) -> bool:
@@ -90,7 +116,8 @@ class ToolGuardMiddleware:
             isinstance(team, str) and team in self.team_ids
         )
 
-    async def _scan(self, results: list[ToolResult]) -> frozenset[str]:
+    async def _scan(self, results: list[ToolResult]) -> dict[str, str]:
+        """Returns the verdict to mark each result hash with; results the scanner cleared are left out."""
         texts: dict[str, str] = {}
         new: dict[str, str] = {}
         for result in results:
@@ -99,17 +126,22 @@ class ToolGuardMiddleware:
                 new.setdefault(result.hash, result.text)
         known = [h for h in texts if h not in new]
         flagged: set[str] = set()
+        unchecked = set(texts)
         try:
             async with asyncio.timeout(self.timeout):
                 hits, unknown = await self._post(new, known)
                 flagged.update(hits)
                 retry = {h: texts[h] for h in unknown if h in texts and h not in new}
+                unchecked = set(retry)
                 if retry:
                     hits, _ = await self._post(retry, [])
                     flagged.update(hits)
+                    unchecked = set()
         except Exception as exc:  # noqa: BLE001
             _log_warning("tool guard scan error: %s", type(exc).__name__)
-        return frozenset(flagged)
+        verdicts = dict.fromkeys(unchecked, UNCHECKED)
+        verdicts.update(dict.fromkeys(flagged, FLAGGED))
+        return verdicts
 
     async def _post(self, new: dict[str, str], known: list[str]) -> tuple[list[str], list[str]]:
         payload = {"new": [{"hash": h, "text": t} for h, t in new.items()], "known": known}

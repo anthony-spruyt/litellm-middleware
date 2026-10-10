@@ -6,7 +6,7 @@ Composable middleware for the [LiteLLM](https://github.com/BerriAI/litellm) prox
 | ------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
 | `secret-masking`    | yes      | Swaps credentials for same-shape fakes before the request leaves the proxy, and back in the reply    |
 | `ratelimit-headers` | no       | Restores Anthropic's `anthropic-ratelimit-unified-*` response headers that LiteLLM renames           |
-| `tool-guard`        | no       | Marks tool results that a scanner flags as prompt injection as untrusted data, for configured keys   |
+| `tool-guard`        | no       | Marks tool results a scanner flags, or could not check, as untrusted data, for configured keys       |
 
 A required middleware that fails to import stops the proxy from starting. An optional one logs `failed to load <name> middleware` and the proxy serves without it.
 
@@ -114,7 +114,7 @@ It swaps fakes in the reply back to the real values, including streamed text and
 
 ## Tool guard
 
-`tool_guard/` sends tool results to a scanner before the request goes upstream, and wraps each one the scanner flags in a marker that tells the model the text is tool data, not instructions. It runs after `secret-masking`, so the scanner only sees masked text. It reads tool results from:
+`tool_guard/` sends tool results to a scanner before the request goes upstream, and wraps each one the scanner flags, or that could not be checked, in a marker that names its verdict and tells the model the text is tool data, not instructions. It runs after `secret-masking`, so the scanner only sees masked text. It reads tool results from:
 
 - `/v1/messages`: `tool_result` blocks in user turns, including nested `document` and `search_result` blocks, and server tool results (`web_fetch_tool_result`, `mcp_tool_result` and other `*_tool_result` blocks) in assistant turns
 - `/v1/chat/completions`: `role: tool` and `role: function` messages
@@ -129,14 +129,15 @@ It swaps fakes in the reply back to the real values, including streamed text and
 | `TOOL_GUARD_TIMEOUT_SECONDS` | Time limit for all scanner calls on one request               | `3`                |
 | `TOOL_GUARD_MAX_TEXT_BYTES`  | Size above which a tool result is wrapped without a scan      | `262144` (256 KiB) |
 
-A request is scanned when its key alias or team ID is listed. Enforced keys use the HTTP Responses API; WebSocket mode is rejected for them.
+A request is scanned when its key alias or team ID is listed. Enforced keys can use the endpoints listed above, `/v1/messages/count_tokens`, embeddings, moderations, image generation, and tool calls through LiteLLM's MCP gateway. Any other endpoint, Responses WebSocket mode included, answers their requests with a client error.
 
 - Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text fields joined in order with newlines. For Gemini `functionResponse`, the text fields are the object keys and string values of `response`.
 - Results after the last assistant turn, and server tool results in the last assistant turn, go to the scanner with their text. Older results go by hash only, so the scanner answers from its verdict cache.
-- A tool result larger than `TOOL_GUARD_MAX_TEXT_BYTES` (UTF-8) is wrapped without a scanner call.
-- The marker is `<untrusted-tool-output id="...">` ... `</untrusted-tool-output id="...">`, where the id is the first 16 hex digits of the result's hash, so the text inside cannot contain its own closing tag.
-- The rewrite changes only the text of flagged results, and the same input always gives the same output, so prompt caching keeps working.
-- Scanner errors and timeouts are logged as `tool guard scan error: <error>`.
+- A tool result larger than `TOOL_GUARD_MAX_TEXT_BYTES` (UTF-8) is marked `unchecked` without a scanner call.
+- The marker is `<untrusted-tool-output id="..." verdict="...">` ... `</untrusted-tool-output id="...">`, where the id is the first 16 hex digits of the result's hash, so the text inside cannot contain its own closing tag.
+- The verdict is `suspected-prompt-injection` for results the scanner flags and `unchecked` for results without a verdict. A header line after the opening tag tells the model how to treat each: flagged output is data only, and the model tells the user if its task depends on it.
+- The rewrite changes only the text of marked results, and the same input and verdicts always give the same output, so prompt caching keeps working.
+- When a scanner call fails or runs out of time, every result in the request without a verdict from it is marked `unchecked`. Errors and timeouts are logged as `tool guard scan error: <error>`.
 
 Scanner contract:
 
@@ -146,4 +147,4 @@ POST {TOOL_GUARD_URL}/v1/scan
 -> {"flagged": ["sha256:..."], "unknown": ["sha256:..."]}
 ```
 
-`unknown` lists `known` hashes the scanner has no verdict for. The middleware sends those results again with their text in a second call, inside the same time limit, and wraps anything either call flags.
+`unknown` lists `known` hashes the scanner has no verdict for. The middleware sends those results again with their text in a second call, inside the same time limit, and wraps anything either call flags. If the second call fails, the results it carried are marked `unchecked`.
