@@ -170,23 +170,122 @@ def test_callers_not_enforced_skip_the_scanner(proxy):
     assert _dumps(sent["messages"]) == _dumps(body["messages"])
 
 
-def test_responses_wraps_flagged_function_call_output(proxy):
-    nonce = uuid.uuid4().hex
-    body = {
-        "model": MODEL,
+def _responses(nonce: str) -> dict:
+    return {
+        "model": OPENAI_MODEL,
         "max_output_tokens": 64,
         "input": [
             {"role": "user", "content": "read the file"},
             {"type": "function_call", "call_id": "fc_01", "name": "Read", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "fc_01", "output": f"{INJECTION} {nonce}"},
+            {"type": "function_call", "call_id": "fc_02", "name": "Read", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "fc_02", "output": f"benign {nonce}"},
+            {
+                "type": "mcp_call",
+                "id": "mcp_01",
+                "server_label": "docs",
+                "name": "read",
+                "arguments": "{}",
+                "output": f"{INJECTION} mcp {nonce}",
+            },
+            {"role": "user", "content": "follow-up"},
         ],
         "tools": [{"type": "function", "name": "Read", "parameters": {"type": "object", "properties": {}}}],
     }
 
-    sent = _send(proxy, "/v1/responses", body, GUARDED_KEY)
 
-    text = f"{INJECTION} {nonce}"
-    assert _dumps(wrap(text, content_hash(text))) in _dumps(sent)
+def _flag_responses(body: dict) -> dict:
+    out = copy.deepcopy(body)
+    for item in out["input"]:
+        if INJECTION in item.get("output", ""):
+            item["output"] = wrap(item["output"], content_hash(item["output"]))
+    return out
+
+
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/responses/compact"])
+def test_responses_wraps_flagged_outputs_and_keeps_the_rest_byte_identical(proxy, path):
+    body = _responses(uuid.uuid4().hex)
+
+    baseline = _send(proxy, path, body, MASTER_KEY)
+    guarded = _send(proxy, path, body, GUARDED_KEY)
+
+    assert _dumps(guarded) == _dumps(_flag_responses(baseline))
+    assert _dumps(guarded["input"]) == _dumps(_flag_responses(body)["input"])
+    assert guarded["input"] != body["input"]
+
+
+def _gemini(nonce: str) -> tuple[dict, dict]:
+    response = {"output": f"{INJECTION} {nonce}", "lines": 3}
+    body = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "read the file"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "read", "args": {}}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "read", "response": response}}]},
+        ]
+    }
+    return body, response
+
+
+def test_gemini_wraps_flagged_function_response_and_keeps_the_rest_byte_identical(proxy):
+    body, response = _gemini(uuid.uuid4().hex)
+    path = f"/v1beta/models/{OPENAI_MODEL}:generateContent"
+    before = len(proxy.scanner_received())
+
+    baseline = _send(proxy, path, body, MASTER_KEY)
+    guarded = _send(proxy, path, body, GUARDED_KEY)
+
+    text = f"output\n{response['output']}\nlines"
+    assert proxy.scanner_received()[before]["new"] == [{"hash": content_hash(text), "text": text}]
+    expected = copy.deepcopy(baseline)
+    tool = next(m for m in expected["messages"] if m["role"] == "tool")
+    assert tool["content"] == json.dumps(response)
+    tool["content"] = json.dumps({**response, "output": wrap(response["output"], content_hash(text))})
+    assert _dumps(guarded) == _dumps(expected)
+
+
+WS_REJECTION = "use the HTTP Responses API"
+
+
+def _websocket(proxy, key: str) -> dict:
+    """Opens Responses WebSocket mode inside the proxy container and returns the first frame and close code."""
+    port = proxy.base.rsplit(":", 1)[1]
+    event = {"type": "response.create", "model": OPENAI_MODEL, "input": _responses(uuid.uuid4().hex)["input"]}
+    code = f"""
+import asyncio, json, websockets
+async def main():
+    url = "ws://127.0.0.1:{port}/v1/responses?model={OPENAI_MODEL}"
+    headers = {{"authorization": "Bearer {key}"}}
+    async with websockets.connect(url, additional_headers=headers) as ws:
+        await ws.send({json.dumps(json.dumps(event))})
+        frames = []
+        try:
+            while True:
+                frames.append(json.loads(await asyncio.wait_for(ws.recv(), 30)))
+        except websockets.ConnectionClosed:
+            pass
+        print(json.dumps({{"frames": frames, "code": ws.close_code}}))
+asyncio.run(main())
+"""
+    return json.loads(proxy.python(code).strip().splitlines()[-1])
+
+
+def test_websocket_mode_is_rejected_for_enforced_keys(proxy):
+    before = len(proxy.upstream_received())
+
+    result = _websocket(proxy, GUARDED_KEY)
+
+    assert result["code"] == 1008
+    assert result["frames"][0]["type"] == "error"
+    assert result["frames"][0]["error"]["type"] == "invalid_request_error"
+    assert WS_REJECTION in result["frames"][0]["error"]["message"]
+    assert len(proxy.upstream_received()) == before
+
+
+def test_websocket_mode_is_not_rejected_for_other_keys(proxy):
+    result = _websocket(proxy, MASTER_KEY)
+
+    assert result["code"] != 1008
+    assert all(WS_REJECTION not in json.dumps(frame) for frame in result["frames"])
 
 
 def _server_tool_turn(nonce: str, stream: bool) -> dict:

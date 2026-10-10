@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -16,7 +15,8 @@ from .tool_results import ToolResult, find, rewrite
 DEFAULT_TIMEOUT_SECONDS = 3.0
 DEFAULT_MAX_TEXT_BYTES = 256 * 1024
 _log_warning = MiddlewarePipeline._log_warning
-_FRAME_FIELD = "first_message"
+_WEBSOCKET_CALL_TYPE = "_aresponses_websocket"
+_WEBSOCKET_REJECTED = "Responses WebSocket mode is not available for this key; use the HTTP Responses API."
 _CALL_TYPES = {
     "anthropic_messages": ("messages", "anthropic"),
     "acompletion": ("messages", "chat"),
@@ -24,7 +24,6 @@ _CALL_TYPES = {
     "aresponses": ("input", "responses"),
     "responses": ("input", "responses"),
     "acompact_responses": ("input", "responses"),
-    "_aresponses_websocket": (_FRAME_FIELD, "responses"),
     "agenerate_content": ("contents", "gemini"),
     "agenerate_content_stream": ("contents", "gemini"),
 }
@@ -55,12 +54,16 @@ class ToolGuardMiddleware:
 
     # async_* names mirror LiteLLM's CustomLogger hooks; callers await them.
     async def async_pre_call_hook(self, user_api_key_dict, _cache, data: dict, call_type: str):  # NOSONAR
+        if not self.enabled or not self._enforced(user_api_key_dict):
+            return data
+        if call_type == _WEBSOCKET_CALL_TYPE:
+            return ValueError(_WEBSOCKET_REJECTED)
         target = _CALL_TYPES.get(call_type)
-        if not self.enabled or target is None or not self._enforced(user_api_key_dict):
+        if target is None:
             return data
         field, fmt = target
         value = data.get(field)
-        guarded = await (self._guard_frame(value, fmt) if field == _FRAME_FIELD else self._guard(value, fmt))
+        guarded = await self._guard(value, fmt)
         if guarded is not value:
             data[field] = guarded
         return data
@@ -79,19 +82,6 @@ class ToolGuardMiddleware:
         if hits:
             _log_info("tool guard flagged %d tool result(s), marked %d as untrusted", len(hits), len(marked))
         return rewrite(items, marked) if marked else items
-
-    async def _guard_frame(self, frame: Any, fmt: str) -> Any:
-        try:
-            event = json.loads(frame) if isinstance(frame, str) else None
-        except ValueError:
-            return frame
-        if not isinstance(event, dict):
-            return frame
-        items = event.get("input")
-        guarded = await self._guard(items, fmt)
-        if guarded is items:
-            return frame
-        return json.dumps({**event, "input": guarded})
 
     def _enforced(self, user_api_key_dict: Any) -> bool:
         alias = getattr(user_api_key_dict, "key_alias", None)
@@ -117,7 +107,7 @@ class ToolGuardMiddleware:
                 if retry:
                     hits, _ = await self._post(retry, [])
                     flagged.update(hits)
-        except Exception as exc:  # noqa: BLE001 - a scanner fault must never fail the request
+        except Exception as exc:  # noqa: BLE001
             _log_warning("tool guard scan error: %s", type(exc).__name__)
         return frozenset(flagged)
 
@@ -143,7 +133,8 @@ def _hashes(value: Any, name: str) -> list[str]:
 def _default_client() -> Any:
     import httpx
 
-    return httpx.AsyncClient()
+    # The asyncio.timeout around scanner calls sets the time limit, not httpx's per-call default.
+    return httpx.AsyncClient(timeout=None)
 
 
 def _log_info(message: str, *args: Any) -> None:

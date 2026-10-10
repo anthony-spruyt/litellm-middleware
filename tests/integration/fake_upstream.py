@@ -70,6 +70,26 @@ def _chat_completion(model, text):
     }
 
 
+def _response(model, text):
+    return {
+        "id": "resp_it",
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_it",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20},
+    }
+
+
 def _chat_chunks(model, text):
     base = {"id": "chatcmpl-it", "object": "chat.completion.chunk", "created": 0, "model": model}
     yield {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}]}
@@ -99,6 +119,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._stream(body["model"], text)
             else:
                 self._json(200, _message(body["model"], text), RATELIMIT_HEADERS)
+        elif self.path.startswith("/v1/responses"):
+            self._json(200, _response(body["model"], "ok"))
         elif self.path.startswith("/v1/chat/completions"):
             if body.get("stream"):
                 frames = [f"data: {json.dumps(c)}\n\n" for c in _chat_chunks(body["model"], "ok")]

@@ -118,7 +118,7 @@ It swaps fakes in the reply back to the real values, including streamed text and
 
 - `/v1/messages`: `tool_result` blocks in user turns, including nested `document` and `search_result` blocks, and server tool results (`web_fetch_tool_result`, `mcp_tool_result` and other `*_tool_result` blocks) in assistant turns
 - `/v1/chat/completions`: `role: tool` and `role: function` messages
-- `/v1/responses`, including compaction and WebSocket mode: `function_call_output`, `custom_tool_call_output`, shell and patch call outputs, and `mcp_call` output
+- `/v1/responses` and `/v1/responses/compact`: `function_call_output`, `custom_tool_call_output`, shell and patch call outputs, and `mcp_call` output
 - Gemini `generateContent`: `functionResponse` parts
 
 | Variable                     | Purpose                                                       | Default            |
@@ -129,9 +129,9 @@ It swaps fakes in the reply back to the real values, including streamed text and
 | `TOOL_GUARD_TIMEOUT_SECONDS` | Time limit for all scanner calls on one request               | `3`                |
 | `TOOL_GUARD_MAX_TEXT_BYTES`  | Size above which a tool result is wrapped without a scan      | `262144` (256 KiB) |
 
-A request is scanned when its key alias or team ID is listed.
+A request is scanned when its key alias or team ID is listed. Enforced keys use the HTTP Responses API; WebSocket mode is rejected for them.
 
-- Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text fields joined in order with newlines.
+- Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text fields joined in order with newlines. For Gemini `functionResponse`, the text fields are the object keys and string values of `response`.
 - Results after the last assistant turn, and server tool results in the last assistant turn, go to the scanner with their text. Older results go by hash only, so the scanner answers from its verdict cache.
 - A tool result larger than `TOOL_GUARD_MAX_TEXT_BYTES` (UTF-8) is wrapped without a scanner call.
 - The marker is `<untrusted-tool-output id="...">` ... `</untrusted-tool-output id="...">`, where the id is the first 16 hex digits of the result's hash, so the text inside cannot contain its own closing tag.

@@ -3,6 +3,7 @@ import copy
 import hashlib
 import importlib
 import json
+import re
 import sys
 import types
 from types import SimpleNamespace
@@ -294,7 +295,7 @@ async def test_follow_up_shares_the_timeout_budget(mod, fake_litellm, tr):
     assert fake_litellm.verbose_proxy_logger.warnings
 
 
-async def test_bad_unknown_returns_the_request(mod, fake_litellm):
+async def test_bad_unknown_is_logged(mod, fake_litellm):
     body = json.dumps({"flagged": [_sha(INJECTION + "\n tail")], "unknown": "nope"}).encode()
     data = _anthropic()
     original = copy.deepcopy(data)
@@ -603,37 +604,43 @@ async def test_compact_responses_is_guarded(mod, tr):
     assert out["input"][4]["output"][0]["text"] == tr.wrap(INJECTION, _sha(INJECTION))
 
 
-async def test_websocket_first_message_is_guarded(mod, tr):
+def _websocket_frame():
     event = {"type": "response.create", "model": "gpt-x", "input": _responses()["input"]}
-    data = {"litellm_call_id": "call-1", "first_message": json.dumps(event)}
-
-    out = await _run(_guard(mod, Scanner()), data, "_aresponses_websocket")
-
-    expected = copy.deepcopy(event)
-    expected["input"][4]["output"][0]["text"] = tr.wrap(INJECTION, _sha(INJECTION))
-    assert json.loads(out["first_message"]) == expected
+    return {"litellm_call_id": "call-1", "first_message": json.dumps(event)}
 
 
-@pytest.mark.parametrize("frame", ["not json", "[]", json.dumps({"type": "response.create", "input": "hi"})])
-async def test_websocket_frames_without_tool_results_are_untouched(mod, frame):
-    data = {"litellm_call_id": "call-1", "first_message": frame}
+async def test_websocket_mode_is_rejected_for_enforced_callers(mod):
+    scanner = Scanner()
 
-    out = await _run(_guard(mod, Scanner()), data, "_aresponses_websocket")
+    out = await _run(_guard(mod, scanner), _websocket_frame(), "_aresponses_websocket")
 
+    assert isinstance(out, Exception)
+    assert "HTTP Responses API" in str(out)
+    assert scanner.requests == []
+
+
+@pytest.mark.parametrize("user", [None, SimpleNamespace(key_alias="other", team_id=None)])
+async def test_websocket_mode_is_untouched_for_other_callers(mod, user):
+    scanner = Scanner()
+    data = _websocket_frame()
+    frame = data["first_message"]
+
+    out = await _run(_guard(mod, scanner), data, "_aresponses_websocket", user=user)
+
+    assert out is data
     assert out["first_message"] is frame
+    assert scanner.requests == []
 
 
-async def test_websocket_frame_without_flags_keeps_its_bytes(mod):
-    frame = json.dumps({"type": "response.create", "input": _responses(new="fine")["input"]}, separators=(",", ":"))
-    data = {"litellm_call_id": "call-1", "first_message": frame}
+async def test_websocket_mode_is_untouched_without_a_scanner_url(mod):
+    guard = mod.ToolGuardMiddleware(None, key_aliases={"guarded"})
+    data = _websocket_frame()
 
-    out = await _run(_guard(mod, Scanner()), data, "_aresponses_websocket")
-
-    assert out["first_message"] is frame
+    assert await _run(guard, data, "_aresponses_websocket") is data
 
 
 @pytest.mark.parametrize("call_type", ["agenerate_content", "agenerate_content_stream"])
-async def test_gemini_function_response_strings_are_wrapped(mod, tr, call_type):
+async def test_gemini_function_response_keys_are_scanned_and_strings_wrapped(mod, tr, call_type):
     response = {"output": INJECTION, "lines": 3, "meta": {"path": "README"}}
     data = {
         "litellm_call_id": "call-1",
@@ -648,7 +655,7 @@ async def test_gemini_function_response_strings_are_wrapped(mod, tr, call_type):
 
     out = await _run(_guard(mod, scanner), data, call_type)
 
-    text = f"{INJECTION}\nREADME"
+    text = f"output\n{INJECTION}\nlines\nmeta\npath\nREADME"
     assert scanner.requests[0][1] == {"new": [{"hash": _sha(text), "text": text}], "known": []}
     expected = copy.deepcopy(original)
     wrapped = expected["contents"][2]["parts"][0]["functionResponse"]["response"]
@@ -727,7 +734,7 @@ async def test_other_call_types_are_untouched(mod):
     ],
     ids=["5xx", "bad-json", "bad-flagged", "not-object", "timeout"],
 )
-async def test_scanner_errors_return_the_request(mod, fake_litellm, scanner):
+async def test_scanner_errors_are_logged(mod, fake_litellm, scanner):
     data = _anthropic()
     original = copy.deepcopy(data)
 
@@ -737,7 +744,7 @@ async def test_scanner_errors_return_the_request(mod, fake_litellm, scanner):
     assert fake_litellm.verbose_proxy_logger.warnings
 
 
-async def test_unreachable_scanner_returns_the_request(mod, fake_litellm):
+async def test_unreachable_scanner_is_logged(mod, fake_litellm):
     def refuse(request):
         raise httpx.ConnectError("refused", request=request)
 
@@ -852,8 +859,8 @@ def test_find_reads_text_from_mixed_and_malformed_shapes(mod, tr):
 
     assert [(r.text, r.new) for r in tr.find(anthropic, "anthropic")] == [("a", True), ("b", True)]
     assert [r.text for r in tr.find(responses, "responses")] == ["out\nerr"]
-    assert [r.text for r in tr.find(gemini, "gemini")] == ["r1"]
-    assert tr.content_text({"response": ["x", 2]}, "json") == "x"
+    assert [r.text for r in tr.find(gemini, "gemini")] == ["rows\nr1\nn"]
+    assert tr.content_text({"response": ["x", 2]}, "json") == "response\nx"
 
 
 async def test_flagged_results_in_one_message_are_all_wrapped(mod, tr):
@@ -867,3 +874,88 @@ async def test_flagged_results_in_one_message_are_all_wrapped(mod, tr):
     blocks = out["messages"][4]["content"]
     assert blocks[0]["content"][0]["text"] == tr.wrap(INJECTION, _sha(INJECTION + "\n tail"))
     assert blocks[1]["content"] == tr.wrap(INJECTION + "!", _sha(INJECTION + "!"))
+
+
+async def test_gemini_text_in_keys_is_scanned(mod, tr):
+    response = {INJECTION: "value"}
+    data = {
+        "litellm_call_id": "call-1",
+        "contents": [{"role": "user", "parts": [{"functionResponse": {"name": "read", "response": response}}]}],
+    }
+    scanner = Scanner()
+
+    out = await _run(_guard(mod, scanner), data, "agenerate_content")
+
+    text = f"{INJECTION}\nvalue"
+    assert scanner.requests[0][1] == {"new": [{"hash": _sha(text), "text": text}], "known": []}
+    wrapped = out["contents"][0]["parts"][0]["functionResponse"]["response"]
+    assert wrapped == {INJECTION: tr.wrap("value", _sha(text))}
+
+
+DEPTH = 2000
+
+
+async def test_deeply_nested_tool_result_is_scanned_and_wrapped(mod, tr):
+    leaf = {"type": "text", "text": INJECTION}
+    content = [leaf]
+    for _ in range(DEPTH):
+        content = [{"type": "nested", "content": content}]
+    data = _anthropic(new="x")
+    data["messages"][4]["content"][0]["content"] = content
+    scanner = Scanner()
+
+    out = await _run(_guard(mod, scanner), data)
+
+    assert scanner.requests[0][1]["new"] == [{"hash": _sha(INJECTION), "text": INJECTION}]
+    node = out["messages"][4]["content"][0]["content"]
+    for _ in range(DEPTH):
+        node = node[0]["content"]
+    assert node[0]["text"] == tr.wrap(INJECTION, _sha(INJECTION))
+    assert leaf["text"] == INJECTION
+
+
+async def test_deeply_nested_gemini_response_is_scanned_and_wrapped(mod, tr):
+    response = {"output": INJECTION}
+    for _ in range(DEPTH):
+        response = {"k": [response]}
+    data = {
+        "litellm_call_id": "call-1",
+        "contents": [{"role": "user", "parts": [{"functionResponse": {"name": "read", "response": response}}]}],
+    }
+    scanner = Scanner()
+
+    out = await _run(_guard(mod, scanner), data, "agenerate_content")
+
+    text = "k\n" * DEPTH + f"output\n{INJECTION}"
+    assert scanner.requests[0][1]["new"] == [{"hash": _sha(text), "text": text}]
+    node = out["contents"][0]["parts"][0]["functionResponse"]["response"]
+    for _ in range(DEPTH):
+        node = node["k"][0]
+    assert node == {"output": tr.wrap(INJECTION, _sha(text))}
+
+
+SLOW_SECONDS = 5.5
+
+
+async def test_default_client_waits_for_the_configured_time_limit(mod, tr):
+    async def slow_scanner(reader, writer):
+        head = await reader.readuntil(b"\r\n\r\n")
+        length = int(re.search(rb"content-length: (\d+)", head, re.IGNORECASE).group(1))
+        payload = json.loads(await reader.readexactly(length))
+        await asyncio.sleep(SLOW_SECONDS)
+        body = json.dumps({"flagged": [i["hash"] for i in payload["new"]]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n")
+        writer.write(b"content-length: %d\r\nconnection: close\r\n\r\n%s" % (len(body), body))
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(slow_scanner, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    guard = mod.ToolGuardMiddleware(f"http://127.0.0.1:{port}", key_aliases={"guarded"}, timeout=SLOW_SECONDS + 3)
+    try:
+        async with server:
+            out = await _run(guard, _chat(), "acompletion")
+    finally:
+        await guard._connection().aclose()
+
+    assert out["messages"][5]["content"][0]["text"] == tr.wrap(INJECTION, _sha(INJECTION))
