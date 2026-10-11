@@ -21,6 +21,7 @@ from ..pipeline import MiddlewarePipeline
 from .shared_fakes import SharedFakes, shared_from_env
 
 _URLSAFE_20 = r"[A-Za-z0-9_\-]{20,}"
+_ALNUM_40 = r"[A-Za-z0-9]{40,}"
 
 # (prefix, body, suffix). Only the body is replaced; the prefix keeps the fake recognisable.
 _PATTERNS: tuple[tuple[str, str, str | None], ...] = (
@@ -38,11 +39,11 @@ _PATTERNS: tuple[tuple[str, str, str | None], ...] = (
     (r"ctx7sk-", _URLSAFE_20, None),
     (r"SG\.", r"[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}", None),
     (r"shp(?:at|ca|pa|ss)_", r"[A-Za-z0-9]{32,}", None),
-    (r"do[opr]_v1_", r"[A-Za-z0-9]{40,}", None),
-    (r"pplx-", r"[A-Za-z0-9]{40,}", None),
+    (r"do[opr]_v1_", _ALNUM_40, None),
+    (r"pplx-", _ALNUM_40, None),
     (r"PMAK-", r"[A-Za-z0-9]{20,}-[A-Za-z0-9]{20,}", None),
     (r"lin_api_", r"[A-Za-z0-9]{30,}", None),
-    (r"ntn_", r"[A-Za-z0-9]{40,}", None),
+    (r"ntn_", _ALNUM_40, None),
     (r"AIza", r"[A-Za-z0-9_\-]{35}(?![A-Za-z0-9_\-])", None),
     (r"GOCSPX-", r"[A-Za-z0-9_\-]{28}(?![A-Za-z0-9_\-])", None),
     (r"ya29\.", _URLSAFE_20, None),
