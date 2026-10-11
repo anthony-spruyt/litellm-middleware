@@ -38,9 +38,12 @@ class FallbackAuthMiddleware:
 def _is_fallback_group(kwargs: dict) -> bool:
     for key in ("litellm_metadata", "metadata"):
         metadata = kwargs.get(key)
-        group = metadata.get("model_group") if isinstance(metadata, dict) else None
-        if isinstance(group, str):
-            return group.startswith(_GROUP_PREFIX)
+        if not isinstance(metadata, dict):
+            continue
+        for field in ("deployment_model_name", "model_group"):
+            name = metadata.get(field)
+            if isinstance(name, str):
+                return name.startswith(_GROUP_PREFIX)
     return False
 
 
@@ -50,7 +53,6 @@ def _scrub_entry(entry: Any) -> dict | None:
 
 
 def _scrub(headers: Any) -> dict | None:
-    """Returns a cleaned copy, or None when there is nothing to remove."""
     if not isinstance(headers, dict):
         return None
 
@@ -70,9 +72,13 @@ def _scrub(headers: Any) -> dict | None:
 
 def _without_oauth_tokens(beta: str) -> str:
     tokens = [token.strip() for token in beta.split(",")]
-    if not any(t.startswith(_OAUTH_BETA_PREFIX) for t in tokens):
+    if not any(_is_oauth_token(t) for t in tokens):
         return beta
-    return ",".join(t for t in tokens if t and not t.startswith(_OAUTH_BETA_PREFIX))
+    return ",".join(t for t in tokens if t and not _is_oauth_token(t))
+
+
+def _is_oauth_token(token: str) -> bool:
+    return token.lower().startswith(_OAUTH_BETA_PREFIX)
 
 
 fallback_auth = FallbackAuthMiddleware()

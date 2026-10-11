@@ -1,4 +1,4 @@
-from conftest import API_KEY_MODEL, FALLBACK_API_KEY, MASTER_KEY, SUBSCRIPTION_MODEL
+from conftest import ALIASED_API_KEY_MODEL, API_KEY_MODEL, FALLBACK_API_KEY, MASTER_KEY, SUBSCRIPTION_MODEL
 
 OAUTH_TOKEN = "sk-ant-oat01-fake"
 
@@ -40,6 +40,14 @@ def test_fallback_call_uses_the_deployment_api_key(proxy):
 
 def test_client_credentials_are_dropped_on_a_direct_api_key_group_call(proxy):
     seen = _messages(proxy, API_KEY_MODEL)
+
+    assert len(seen) == 1
+    assert seen[0]["headers"]["x-api-key"] == FALLBACK_API_KEY
+    assert "authorization" not in seen[0]["headers"]
+
+
+def test_client_credentials_are_dropped_when_an_alias_resolves_to_an_api_key_group(proxy):
+    seen = _messages(proxy, ALIASED_API_KEY_MODEL)
 
     assert len(seen) == 1
     assert seen[0]["headers"]["x-api-key"] == FALLBACK_API_KEY

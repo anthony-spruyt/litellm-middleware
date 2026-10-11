@@ -96,6 +96,43 @@ async def test_reads_model_group_from_metadata_when_litellm_metadata_is_absent(m
     assert out["headers"] == {}
 
 
+async def test_decides_on_the_selected_deployment_not_the_requested_name(module):
+    kwargs = {
+        "litellm_metadata": {"model_group": "anthropic-api/claude-x", "deployment_model_name": "anthropic/*"},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    assert await _hook(module, kwargs) is None
+
+
+async def test_strips_when_the_selected_deployment_is_an_api_key_group_behind_another_name(module):
+    kwargs = {
+        "litellm_metadata": {"model_group": "claude-alias", "deployment_model_name": "anthropic-api/claude-x"},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {}
+
+
+async def test_reads_deployment_model_name_from_metadata_too(module):
+    kwargs = {
+        "metadata": {"model_group": "claude-alias", "deployment_model_name": "anthropic-api/claude-x"},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {}
+
+
+async def test_drops_oauth_beta_tokens_regardless_of_case(module):
+    out = await _hook(module, _kwargs(headers={"anthropic-beta": "OAuth-2025-04-20,Foo-Bar"}))
+
+    assert out["headers"] == {"anthropic-beta": "Foo-Bar"}
+
+
 @pytest.mark.parametrize("group", ["anthropic/claude-x", "claude-x", "anthropic-apix/claude-x", None, 5])
 async def test_leaves_other_model_groups_untouched(module, group):
     kwargs = _kwargs(

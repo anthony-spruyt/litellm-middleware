@@ -25,6 +25,7 @@ MODEL = "claude-it"
 OPENAI_MODEL = "gpt-it"
 SUBSCRIPTION_MODEL = "anthropic/test-model"
 API_KEY_MODEL = "anthropic-api/test-model"
+ALIASED_API_KEY_MODEL = "aliased-test-model"
 FALLBACK_API_KEY = "sk-" + "ant-api03-" + "fallback-fake"
 GUARDED_KEY = "it-tool-guard-key"
 GUARDED_ALIAS = "it-tool-guard"
@@ -110,7 +111,10 @@ def _config() -> str:
                 },
             ],
             "litellm_settings": {"callbacks": [CALLBACK]},
-            "router_settings": {"fallbacks": [{SUBSCRIPTION_MODEL: [API_KEY_MODEL]}]},
+            "router_settings": {
+                "fallbacks": [{SUBSCRIPTION_MODEL: [API_KEY_MODEL]}],
+                "model_group_alias": {ALIASED_API_KEY_MODEL: API_KEY_MODEL},
+            },
             "general_settings": {
                 "forward_client_headers_to_llm_api": True,
                 "include_call_id_in_error_body": True,
