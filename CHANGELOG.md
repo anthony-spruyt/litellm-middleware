@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.1.0...v1.2.0) (2026-10-11)
+
+
+### Features
+
+* add fallback-auth middleware for API-key fallback deployments ([e460dde](https://github.com/anthony-spruyt/litellm-middleware/commit/e460dde0edf1f3f87002ffebe27ebd30cf038c98))
+* **secret-masking:** mask Cloudflare, Context7 and other vendor token prefixes ([#56](https://github.com/anthony-spruyt/litellm-middleware/issues/56)) ([1c9bda7](https://github.com/anthony-spruyt/litellm-middleware/commit/1c9bda709f3aad299a313ba43fb7a647256e931f))
+
 ## [1.1.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.0.1...v1.1.0) (2026-10-10)
 
 
