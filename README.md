@@ -102,7 +102,7 @@ LiteLLM renames every non-OpenAI upstream header to `llm_provider-<name>` and ha
 
 `secret_masking/` masks `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/responses/compact`, `/v1/completions`, Gemini `generateContent`/`streamGenerateContent`, and the body that `count_tokens`/`input_tokens` forward to the provider.
 
-It swaps credentials with a known prefix (GitHub, Google, Anthropic, OpenAI, AWS, LiteLLM `sk-`, `sl_`, PEM private keys and the others in `_PATTERNS`) for a fake with the same prefix, length and character classes.
+It swaps credentials with a known prefix (GitHub, Google, Anthropic, OpenAI, AWS, Cloudflare, Context7, SendGrid, Shopify, DigitalOcean, Perplexity, Postman, Linear, Notion, LiteLLM `sk-`, `sl_`, PEM private keys and the others in `_PATTERNS`) for a fake with the same prefix, length and character classes.
 
 It swaps fakes in the reply back to the real values, including streamed text and tool-call arguments.
 

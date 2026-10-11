@@ -216,6 +216,77 @@ async def test_ignores_sl_key_shorter_than_minimum(mw):
     assert _user_text(await _mask(mw, text)) == text
 
 
+_POOL = "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5hJ7kL9nP1qR3tU5vX7zA9cE1gI3kM5oQ7sU9wY1"
+_PREFIXED = {
+    "cloudflare_user": ("cf" + "ut_", _POOL[:20]),
+    "cloudflare_account": ("cf" + "at_", _POOL[:20]),
+    "cloudflare_global": ("cf" + "k_", _POOL[:20]),
+    "context7": ("ctx7" + "sk-", "aB3dE5gH7jK9-mN1pQ3s"),
+    "sendgrid": ("SG" + ".", _POOL[:16] + "." + _POOL[16:32]),
+    "shopify_access": ("shp" + "at_", _POOL[:32]),
+    "shopify_secret": ("shp" + "ss_", _POOL[:32]),
+    "digitalocean_pat": ("do" + "p_v1_", _POOL[:40]),
+    "digitalocean_refresh": ("do" + "r_v1_", _POOL[:40]),
+    "perplexity": ("pp" + "lx-", _POOL[:40]),
+    "postman": ("PM" + "AK-", _POOL[:20] + "-" + _POOL[20:40]),
+    "linear": ("lin" + "_api_", _POOL[:30]),
+    "notion": ("nt" + "n_", _POOL[:40]),
+}
+_prefixed = pytest.mark.parametrize(("prefix", "body"), list(_PREFIXED.values()), ids=list(_PREFIXED))
+
+
+@_prefixed
+@pytest.mark.parametrize("extra", ["", "aB3d"], ids=["at_minimum", "longer"])
+async def test_masks_prefixed_tokens_with_same_shape_fake(mw, prefix, body, extra):
+    token = prefix + body + extra
+
+    fake = _user_text(await _mask(mw, f"key {token} ok")).split()[1]
+
+    assert fake != token
+    assert fake.startswith(prefix)
+    assert len(fake) == len(token)
+    assert _classes(fake) == _classes(token)
+
+
+@_prefixed
+async def test_masks_prefixed_tokens_inside_assignments_and_json(mw, prefix, body):
+    token = prefix + body
+
+    assert token not in _user_text(await _mask(mw, f"KEY={token}"))
+    assert token not in _user_text(await _mask(mw, json.dumps({"env": {"KEY": token}})))
+
+
+@_prefixed
+async def test_ignores_prefixed_lookalikes_below_minimum(mw, prefix, body):
+    token = prefix + body[:-1]
+
+    assert _user_text(await _mask(mw, token)) == token
+
+
+@_prefixed
+async def test_restores_prefixed_tokens(mw, prefix, body):
+    token = prefix + body
+    data = await _mask(mw, f"use {token}")
+    fake = _user_text(data).split()[1]
+    response = {"type": "message", "content": [{"type": "text", "text": f"Using {fake}"}]}
+
+    out = await mw.async_post_call_success_hook(data=data, user_api_key_dict=None, response=response)
+
+    assert out["content"][0]["text"] == f"Using {token}"
+
+
+@_prefixed
+async def test_stream_restores_prefixed_tokens_split_across_deltas(mw, prefix, body):
+    token = prefix + body
+    data = await _mask(mw, token)
+    text = f"Your token is {_user_text(data)}. Done"
+
+    out = await _collect(mw, _text_stream_events(_split(text, 3)), data)
+
+    assert _joined(out) == f"Your token is {token}. Done"
+    assert mw.pending_calls() == 0
+
+
 async def test_ignores_sl_identifiers_that_are_not_keys(mw):
     text = "call sl_parse_config() or sl_Xk9fQ2 or my_sl_Xk9fQ2mW7pL4rT8vN3bH6jD1sZ5cY0gA2eU7iO4w"
 
