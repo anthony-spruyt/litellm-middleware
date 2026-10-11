@@ -22,7 +22,7 @@ async def test_drops_client_credentials_from_headers_on_api_fallback_group(modul
     kwargs = _kwargs(
         headers={
             "Authorization": "Bearer sk-ant-oat01-x",
-            "X-Api-Key": "sk-ant-api03-client",
+            "X-Api-Key": "client-api-key",
             "anthropic-version": "2023-06-01",
         }
     )
