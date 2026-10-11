@@ -216,6 +216,38 @@ async def test_ignores_sl_key_shorter_than_minimum(mw):
     assert _user_text(await _mask(mw, text)) == text
 
 
+CF_TOKEN = "cf" + "ut_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5hJ7k"
+CTX7_KEY = "ctx7" + "sk-" + "aB3dE5gH7jK9-mN1pQ3sT5_vW7yZ9bC1dE3f"
+
+
+@pytest.mark.parametrize(
+    ("token", "prefix"), [(CF_TOKEN, "cfut_"), (CTX7_KEY, "ctx7sk-")], ids=["cloudflare", "context7"]
+)
+async def test_masks_cloudflare_and_context7_tokens(mw, token, prefix):
+    fake = _user_text(await _mask(mw, f"key {token} ok")).split()[1]
+
+    assert fake != token
+    assert fake.startswith(prefix)
+    assert len(fake) == len(token)
+    assert _classes(fake) == _classes(token)
+
+
+@pytest.mark.parametrize("token", [CF_TOKEN, CTX7_KEY], ids=["cloudflare", "context7"])
+async def test_restores_cloudflare_and_context7_tokens(mw, token):
+    data = await _mask(mw, f"use {token}")
+    fake = _user_text(data).split()[1]
+    response = {"type": "message", "content": [{"type": "text", "text": f"Using {fake}"}]}
+
+    out = await mw.async_post_call_success_hook(data=data, user_api_key_dict=None, response=response)
+
+    assert out["content"][0]["text"] == f"Using {token}"
+
+
+@pytest.mark.parametrize("token", [CF_TOKEN[:24], CTX7_KEY[:26]], ids=["cloudflare", "context7"])
+async def test_ignores_cloudflare_and_context7_lookalikes_below_minimum(mw, token):
+    assert _user_text(await _mask(mw, token)) == token
+
+
 async def test_ignores_sl_identifiers_that_are_not_keys(mw):
     text = "call sl_parse_config() or sl_Xk9fQ2 or my_sl_Xk9fQ2mW7pL4rT8vN3bH6jD1sZ5cY0gA2eU7iO4w"
 
