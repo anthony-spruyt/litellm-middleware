@@ -25,6 +25,12 @@ DEFAULT_MIDDLEWARE_SPECS: tuple[MiddlewareSpec, ...] = (
     ),
     # After secret-masking, so the scanner only ever sees masked text.
     MiddlewareSpec("tool-guard", "litellm_middleware.tool_guard.tool_guard", "tool_guard", required=False),
+    MiddlewareSpec(
+        "fallback-auth",
+        "litellm_middleware.fallback_auth.fallback_auth",
+        "fallback_auth",
+        required=False,
+    ),
 )
 
 

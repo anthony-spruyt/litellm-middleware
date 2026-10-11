@@ -57,6 +57,7 @@ def test_default_specs_point_at_per_middleware_packages(registry_module):
         "secret-masking": "litellm_middleware.secret_masking.secret_masking",
         "ratelimit-headers": "litellm_middleware.ratelimit_headers.ratelimit_headers",
         "tool-guard": "litellm_middleware.tool_guard.tool_guard",
+        "fallback-auth": "litellm_middleware.fallback_auth.fallback_auth",
     }
 
 
@@ -76,3 +77,9 @@ def test_tool_guard_runs_after_secret_masking(registry_module):
     names = [s.name for s in registry_module.DEFAULT_MIDDLEWARE_SPECS]
 
     assert names.index("tool-guard") > names.index("secret-masking")
+
+
+def test_fallback_auth_is_optional(registry_module):
+    spec = next(s for s in registry_module.DEFAULT_MIDDLEWARE_SPECS if s.name == "fallback-auth")
+
+    assert not spec.required

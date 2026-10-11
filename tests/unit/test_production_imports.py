@@ -41,6 +41,7 @@ def test_production_dotted_imports_resolve(production_import_shape):
         "litellm_middleware.ratelimit_headers.ratelimit_headers",
         "litellm_middleware.tool_guard.tool_results",
         "litellm_middleware.tool_guard.tool_guard",
+        "litellm_middleware.fallback_auth.fallback_auth",
     ]
 
     for module in modules:

@@ -23,6 +23,9 @@ CALLBACK = "litellm_middleware.pipeline_plugin.pipeline_middleware"
 MASTER_KEY = "it-master-key"
 MODEL = "claude-it"
 OPENAI_MODEL = "gpt-it"
+SUBSCRIPTION_MODEL = "anthropic/test-model"
+API_KEY_MODEL = "anthropic-api/test-model"
+FALLBACK_API_KEY = "sk-" + "ant-api03-" + "fallback-fake"
 GUARDED_KEY = "it-tool-guard-key"
 GUARDED_ALIAS = "it-tool-guard"
 SCANNER_PORT = 8097
@@ -86,6 +89,18 @@ def _config() -> str:
                     },
                 },
                 {
+                    "model_name": SUBSCRIPTION_MODEL,
+                    "litellm_params": {"model": "anthropic/test-model", "api_base": "http://127.0.0.1:8099"},
+                },
+                {
+                    "model_name": API_KEY_MODEL,
+                    "litellm_params": {
+                        "model": "anthropic/test-model",
+                        "api_base": "http://127.0.0.1:8099",
+                        "api_key": FALLBACK_API_KEY,
+                    },
+                },
+                {
                     "model_name": OPENAI_MODEL,
                     "litellm_params": {
                         "model": f"openai/{OPENAI_MODEL}",
@@ -95,7 +110,9 @@ def _config() -> str:
                 },
             ],
             "litellm_settings": {"callbacks": [CALLBACK]},
+            "router_settings": {"fallbacks": [{SUBSCRIPTION_MODEL: [API_KEY_MODEL]}]},
             "general_settings": {
+                "forward_client_headers_to_llm_api": True,
                 "include_call_id_in_error_body": True,
                 "master_key": MASTER_KEY,
                 # Gives GUARDED_KEY a key alias without a database; other keys fall through to the master key.

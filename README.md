@@ -2,11 +2,12 @@
 
 Composable middleware for the [LiteLLM](https://github.com/BerriAI/litellm) proxy. LiteLLM loads one callback, `MiddlewarePipeline`. The pipeline runs each middleware listed in `registry.py` on every LiteLLM hook it defines.
 
-| Middleware          | Required | What it does                                                                                         |
-| ------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `secret-masking`    | yes      | Swaps credentials for same-shape fakes before the request leaves the proxy, and back in the reply    |
-| `ratelimit-headers` | no       | Restores Anthropic's `anthropic-ratelimit-unified-*` response headers that LiteLLM renames           |
-| `tool-guard`        | no       | Marks tool results a scanner flags, or could not check, as untrusted data, for configured keys       |
+| Middleware          | Required | What it does                                                                                           |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `secret-masking`    | yes      | Swaps credentials for same-shape fakes before the request leaves the proxy, and back in the reply      |
+| `ratelimit-headers` | no       | Restores Anthropic's `anthropic-ratelimit-unified-*` response headers that LiteLLM renames             |
+| `tool-guard`        | no       | Marks tool results a scanner flags, or could not check, as untrusted data, for configured keys         |
+| `fallback-auth`     | no       | Drops client credentials from calls to `anthropic-api/*` model groups, so they use their own `api_key` |
 
 A required middleware that fails to import stops the proxy from starting. An optional one logs `failed to load <name> middleware` and the proxy serves without it.
 
@@ -97,6 +98,14 @@ LiteLLM renames every non-OpenAI upstream header to `llm_provider-<name>` and ha
 - LiteLLM only calls a hook if the callback's own class defines it (a leaf `__dict__` check). `MiddlewarePipeline` must therefore define every hook it delegates, not inherit it.
 - Not covered: error replies (429s) and the opt-in `LITELLM_RUST` `/v1/messages` path, which sets neither header source.
 - Remove it once LiteLLM forwards `anthropic-ratelimit-unified-*` unprefixed or adds a setting to do so.
+
+## Fallback auth
+
+LiteLLM attaches the client's `Authorization` header to the request before routing, and for a `Bearer sk-ant-oat...` token it overrides the deployment's `api_key`. A router fallback reuses those request kwargs, so an `anthropic-api/<model>` fallback deployment would send the client's token instead of its own key. `fallback_auth/` runs from `async_pre_call_deployment_hook`, after the deployment is chosen, and for model groups starting with `anthropic-api/` removes `authorization`, `x-api-key` and the `oauth-*` tokens of `anthropic-beta` (the header goes if none are left). Every other header and model group is left alone.
+
+- The model group comes from `kwargs["litellm_metadata"]["model_group"]` (`/v1/messages`) or `kwargs["metadata"]["model_group"]`. The headers come from `kwargs["headers"]`, `kwargs["extra_headers"]` and the `extra_headers` of each `kwargs["provider_specific_header"]` entry.
+- It needs `forward_client_headers_to_llm_api: true` to have anything to remove. It returns copies, so the kwargs the router reuses for the next attempt are unchanged.
+- Remove it once LiteLLM stops letting a forwarded client token override a deployment's `api_key`.
 
 ## Secret masking
 
