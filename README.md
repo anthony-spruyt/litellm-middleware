@@ -107,7 +107,7 @@ LiteLLM attaches the client's `Authorization` header to the request before routi
 - It returns copies, so the kwargs the router reuses for the next attempt are unchanged.
 - If scrubbing raises for an `anthropic-api/*` deployment, all three header containers (`headers`, `extra_headers`, `provider_specific_header`) are dropped from the returned copy. Both that and a failed deployment lookup log a warning with the exception type name, never header values.
 - `anthropic-beta` values given as `str`, `bytes`, `list` or `tuple` are scrubbed and keep their type.
-- Because the pipeline defines `async_pre_call_deployment_hook`, the synchronous `litellm.responses` path also takes the hook branch (`_run_sync_responses_pre_call_deployment_hook` in `llm_http_handler.py`).
+- Because the pipeline defines `async_pre_call_deployment_hook`, the synchronous `litellm.responses` path also takes the hook branch (`_run_sync_responses_pre_call_deployment_hook` in `llm_http_handler.py`) and the request is unchanged.
 - Remove it once LiteLLM stops letting a forwarded client token override a deployment's `api_key`.
 
 ## Secret masking
