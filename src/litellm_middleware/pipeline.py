@@ -42,6 +42,34 @@ class MiddlewarePipeline(CustomLogger):
                 )
         return data
 
+    async def async_pre_call_deployment_hook(self, kwargs: dict, call_type=None):
+        changed = False
+        for middleware in self.middlewares:
+            hook = getattr(middleware, "async_pre_call_deployment_hook", None)
+            if hook is None:
+                continue
+
+            try:
+                result = hook(kwargs, call_type)
+                if inspect.isawaitable(result):
+                    result = await result
+            except Exception as exc:
+                if not self.fail_open:
+                    raise
+                self._log_warning("%s deployment hook failed open: %s", middleware, type(exc).__name__)
+                continue
+
+            if isinstance(result, dict):
+                kwargs = result
+                changed = True
+            elif result is not None:
+                self._log_warning(
+                    "%s returned unsupported deployment hook result %r; ignoring",
+                    middleware,
+                    type(result).__name__,
+                )
+        return kwargs if changed else None
+
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict, response):
         for middleware in self.middlewares:
             hook = getattr(middleware, "async_post_call_success_hook", None)

@@ -577,3 +577,64 @@ async def test_middleware_cleanup_error_still_closes_upstream_and_is_not_raised(
 
     assert upstream_closed == [True]
     assert "RuntimeError" in fake_litellm.verbose_proxy_logger.warnings[-1][0]
+
+
+class DeploymentHookMiddleware:
+    def __init__(self, result="replace"):
+        self.result = result
+        self.seen = None
+
+    async def async_pre_call_deployment_hook(self, kwargs, call_type):
+        self.seen = (dict(kwargs), call_type)
+        if self.result == "replace":
+            return {**kwargs, "marked_by": type(self).__name__}
+        return self.result
+
+
+class FailingDeploymentHookMiddleware:
+    async def async_pre_call_deployment_hook(self, kwargs, call_type):
+        raise RuntimeError("boom")
+
+
+async def test_deployment_hook_chains_replacements_in_order(pipeline_module):
+    first, second = DeploymentHookMiddleware(), DeploymentHookMiddleware()
+    pipeline = pipeline_module.MiddlewarePipeline((first, second))
+
+    out = await pipeline.async_pre_call_deployment_hook({"model": "m"}, "anthropic_messages")
+
+    assert out == {"model": "m", "marked_by": "DeploymentHookMiddleware"}
+    assert first.seen == ({"model": "m"}, "anthropic_messages")
+    assert second.seen[0]["marked_by"] == "DeploymentHookMiddleware"
+
+
+async def test_deployment_hook_returns_none_when_no_middleware_changes_kwargs(pipeline_module):
+    pipeline = pipeline_module.MiddlewarePipeline((DeploymentHookMiddleware(result=None), object()))
+
+    assert await pipeline.async_pre_call_deployment_hook({"model": "m"}, "anthropic_messages") is None
+
+
+async def test_deployment_hook_fail_open_continues_to_next_middleware(pipeline_module, fake_litellm):
+    pipeline = pipeline_module.MiddlewarePipeline((FailingDeploymentHookMiddleware(), DeploymentHookMiddleware()))
+
+    out = await pipeline.async_pre_call_deployment_hook({"model": "m"}, "anthropic_messages")
+
+    assert out["marked_by"] == "DeploymentHookMiddleware"
+    assert "RuntimeError" in fake_litellm.verbose_proxy_logger.warnings[-1][0]
+
+
+async def test_deployment_hook_can_fail_closed(pipeline_module):
+    pipeline = pipeline_module.MiddlewarePipeline((FailingDeploymentHookMiddleware(),), fail_open=False)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await pipeline.async_pre_call_deployment_hook({"model": "m"}, "anthropic_messages")
+
+
+async def test_deployment_hook_ignores_unsupported_results(pipeline_module, fake_litellm):
+    pipeline = pipeline_module.MiddlewarePipeline((DeploymentHookMiddleware(result="nope"),))
+
+    assert await pipeline.async_pre_call_deployment_hook({"model": "m"}, "anthropic_messages") is None
+    assert fake_litellm.verbose_proxy_logger.warnings
+
+
+def test_deployment_hook_is_defined_on_the_pipeline_class_itself(pipeline_module):
+    assert "async_pre_call_deployment_hook" in pipeline_module.MiddlewarePipeline.__dict__

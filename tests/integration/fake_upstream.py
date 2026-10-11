@@ -10,6 +10,7 @@ RATELIMIT_HEADERS = {
     "anthropic-ratelimit-unified-5h-utilization": "0.42",
 }
 CHUNK = 5
+OAUTH_BEARER = "Bearer sk-ant-oat"
 received = []
 
 
@@ -110,8 +111,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
-        received.append({"path": self.path, "body": body})
-        if self.path.startswith("/v1/messages/count_tokens"):
+        received.append({"path": self.path, "body": body, "headers": {k.lower(): v for k, v in self.headers.items()}})
+        if self.path.startswith("/v1/messages") and self.headers.get("authorization", "").startswith(OAUTH_BEARER):
+            self._json(429, {"type": "error", "error": {"type": "rate_limit_error", "message": "limited"}})
+        elif self.path.startswith("/v1/messages/count_tokens"):
             self._json(200, {"input_tokens": 10})
         elif self.path.startswith("/v1/messages"):
             text = "echo: " + _last_user_text(body)

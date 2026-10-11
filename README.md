@@ -2,11 +2,12 @@
 
 Composable middleware for the [LiteLLM](https://github.com/BerriAI/litellm) proxy. LiteLLM loads one callback, `MiddlewarePipeline`. The pipeline runs each middleware listed in `registry.py` on every LiteLLM hook it defines.
 
-| Middleware          | Required | What it does                                                                                         |
-| ------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `secret-masking`    | yes      | Swaps credentials for same-shape fakes before the request leaves the proxy, and back in the reply    |
-| `ratelimit-headers` | no       | Restores Anthropic's `anthropic-ratelimit-unified-*` response headers that LiteLLM renames           |
-| `tool-guard`        | no       | Marks tool results a scanner flags, or could not check, as untrusted data, for configured keys       |
+| Middleware          | Required | What it does                                                                                           |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `secret-masking`    | yes      | Swaps credentials for same-shape fakes before the request leaves the proxy, and back in the reply      |
+| `ratelimit-headers` | no       | Restores Anthropic's `anthropic-ratelimit-unified-*` response headers that LiteLLM renames             |
+| `tool-guard`        | no       | Marks tool results a scanner flags, or could not check, as untrusted data, for configured keys         |
+| `fallback-auth`     | no       | Drops client credentials from calls to `anthropic-api/*` model groups, so they use their own `api_key` |
 
 A required middleware that fails to import stops the proxy from starting. An optional one logs `failed to load <name> middleware` and the proxy serves without it.
 
@@ -97,6 +98,17 @@ LiteLLM renames every non-OpenAI upstream header to `llm_provider-<name>` and ha
 - LiteLLM only calls a hook if the callback's own class defines it (a leaf `__dict__` check). `MiddlewarePipeline` must therefore define every hook it delegates, not inherit it.
 - Not covered: error replies (429s) and the opt-in `LITELLM_RUST` `/v1/messages` path, which sets neither header source.
 - Remove it once LiteLLM forwards `anthropic-ratelimit-unified-*` unprefixed or adds a setting to do so.
+
+## Fallback auth
+
+LiteLLM attaches the client's `Authorization` header to the request before routing, and for a `Bearer sk-ant-oat...` token it overrides the deployment's `api_key`. A router fallback reuses those request kwargs, so an `anthropic-api/<model>` fallback deployment would send the client's token instead of its own key. `fallback_auth/` runs from `async_pre_call_deployment_hook`, after the deployment is chosen, and for deployments whose model name starts with `anthropic-api/` removes `authorization`, `x-api-key` and the `oauth-*` tokens of `anthropic-beta` (the header goes if none are left).
+
+- The deployment's model name is `deployment_model_name`, which the router writes for each attempt into the bucket that matches the call type: `kwargs["litellm_metadata"]` for `anthropic_messages`, `aanthropic_messages`, `aresponses` and `responses` (`/v1/messages`, `/v1/responses`), and `kwargs["metadata"]` for `acompletion`, `completion`, `atext_completion` and `text_completion` (`/v1/chat/completions`). Only that bucket is read, and the requested `model_group` plays no part. The headers come from `kwargs["headers"]`, `kwargs["extra_headers"]` and the `extra_headers` of each `kwargs["provider_specific_header"]` entry.
+- It returns copies, so the kwargs the router reuses for the next attempt are unchanged.
+- If scrubbing raises for an `anthropic-api/*` deployment, all three header containers (`headers`, `extra_headers`, `provider_specific_header`) are dropped from the returned copy. Both that and a failed deployment lookup log a warning with the exception type name, never header values.
+- `anthropic-beta` values given as `str`, `bytes`, `list` or `tuple` are scrubbed and keep their type.
+- Because the pipeline defines `async_pre_call_deployment_hook`, the synchronous `litellm.responses` path also takes the hook branch (`_run_sync_responses_pre_call_deployment_hook` in `llm_http_handler.py`) and the request is unchanged.
+- Remove it once LiteLLM stops letting a forwarded client token override a deployment's `api_key`.
 
 ## Secret masking
 
