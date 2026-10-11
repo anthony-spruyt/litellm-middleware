@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 _GROUP_PREFIX = "anthropic-api/"
@@ -11,36 +12,45 @@ _OAUTH_BETA_PREFIX = "oauth-"
 
 class FallbackAuthMiddleware:
     async def async_pre_call_deployment_hook(self, kwargs: dict, call_type: Any = None) -> dict | None:  # NOSONAR
-        if not _is_fallback_group(kwargs):
+        try:
+            is_fallback = _is_fallback_group(kwargs)
+        except Exception:  # noqa: BLE001 - an unidentifiable deployment is left untouched
+            return None
+        if not is_fallback:
             return None
 
-        changes: dict[str, Any] = {}
-        for key in ("headers", "extra_headers"):
-            cleaned = _scrub(kwargs.get(key))
-            if cleaned is not None:
-                changes[key] = cleaned
+        try:
+            return _scrubbed(kwargs)
+        except Exception:  # noqa: BLE001 - any scrub failure must still drop the client headers
+            return {**kwargs, "headers": {}, "extra_headers": {}, "provider_specific_header": None}
 
-        scoped = kwargs.get("provider_specific_header")
-        if isinstance(scoped, dict):
-            cleaned_entry = _scrub_entry(scoped)
-            if cleaned_entry is not None:
-                changes["provider_specific_header"] = cleaned_entry
-        elif isinstance(scoped, (list, tuple)):
-            entries = [_scrub_entry(entry) for entry in scoped]
-            if any(entry is not None for entry in entries):
-                changes["provider_specific_header"] = [
-                    new if new is not None else old for new, old in zip(entries, scoped, strict=True)
-                ]
 
-        return {**kwargs, **changes} if changes else None
+def _scrubbed(kwargs: dict) -> dict | None:
+    changes: dict[str, Any] = {}
+    for key in ("headers", "extra_headers"):
+        cleaned = _scrub(kwargs.get(key))
+        if cleaned is not None:
+            changes[key] = cleaned
+
+    scoped = kwargs.get("provider_specific_header")
+    if isinstance(scoped, Mapping):
+        cleaned_entry = _scrub_entry(scoped)
+        if cleaned_entry is not None:
+            changes["provider_specific_header"] = cleaned_entry
+    elif isinstance(scoped, (list, tuple)):
+        entries = [_scrub_entry(entry) for entry in scoped]
+        if any(entry is not None for entry in entries):
+            changes["provider_specific_header"] = [
+                new if new is not None else old for new, old in zip(entries, scoped, strict=True)
+            ]
+
+    return {**kwargs, **changes} if changes else None
 
 
 def _is_fallback_group(kwargs: dict) -> bool:
-    for key in ("litellm_metadata", "metadata"):
-        metadata = kwargs.get(key)
-        if not isinstance(metadata, dict):
-            continue
-        for field in ("deployment_model_name", "model_group"):
+    buckets = [b for b in (kwargs.get("litellm_metadata"), kwargs.get("metadata")) if isinstance(b, Mapping)]
+    for field in ("deployment_model_name", "model_group"):
+        for metadata in buckets:
             name = metadata.get(field)
             if isinstance(name, str):
                 return name.startswith(_GROUP_PREFIX)
@@ -48,12 +58,12 @@ def _is_fallback_group(kwargs: dict) -> bool:
 
 
 def _scrub_entry(entry: Any) -> dict | None:
-    cleaned = _scrub(entry.get("extra_headers")) if isinstance(entry, dict) else None
+    cleaned = _scrub(entry.get("extra_headers")) if isinstance(entry, Mapping) else None
     return None if cleaned is None else {**entry, "extra_headers": cleaned}
 
 
 def _scrub(headers: Any) -> dict | None:
-    if not isinstance(headers, dict):
+    if not isinstance(headers, Mapping):
         return None
 
     cleaned: dict = {}

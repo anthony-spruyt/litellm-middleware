@@ -1,5 +1,6 @@
 import importlib
 import sys
+from collections.abc import Mapping
 
 import pytest
 
@@ -152,3 +153,127 @@ async def test_tolerates_missing_or_non_dict_metadata_and_headers(module):
     assert await _hook(module, {"model": "m"}) is None
     assert await _hook(module, {"litellm_metadata": None, "metadata": "x"}) is None
     assert await _hook(module, _kwargs(headers=None, extra_headers="x", provider_specific_header=None)) is None
+
+
+class _ReadOnlyMapping(Mapping):
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+
+async def test_scrubs_headers_held_in_a_non_dict_mapping(module):
+    kwargs = _kwargs(
+        headers=_ReadOnlyMapping({"authorization": "Bearer t", "x-keep": "1"}),
+        extra_headers=_ReadOnlyMapping({"x-api-key": "k"}),
+        provider_specific_header=_ReadOnlyMapping(
+            {"custom_llm_provider": "anthropic", "extra_headers": _ReadOnlyMapping({"authorization": "Bearer t"})}
+        ),
+    )
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {"x-keep": "1"}
+    assert out["extra_headers"] == {}
+    assert out["provider_specific_header"] == {"custom_llm_provider": "anthropic", "extra_headers": {}}
+
+
+async def test_reads_deployment_name_from_a_non_dict_mapping_bucket(module):
+    kwargs = {
+        "litellm_metadata": _ReadOnlyMapping({"deployment_model_name": "anthropic-api/claude-x"}),
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {}
+
+
+async def test_deployment_name_in_metadata_wins_over_model_group_in_litellm_metadata(module):
+    kwargs = {
+        "litellm_metadata": {"model_group": "claude-alias"},
+        "metadata": {"deployment_model_name": "anthropic-api/claude-x"},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {}
+
+
+async def test_deployment_name_in_litellm_metadata_wins_over_model_group_in_metadata(module):
+    kwargs = {
+        "litellm_metadata": {"deployment_model_name": "anthropic/*"},
+        "metadata": {"model_group": "anthropic-api/claude-x"},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    assert await _hook(module, kwargs) is None
+
+
+async def test_deployment_name_in_metadata_wins_over_a_matching_model_group_in_litellm_metadata(module):
+    kwargs = {
+        "litellm_metadata": {"model_group": "anthropic-api/claude-x"},
+        "metadata": {"deployment_model_name": "anthropic/*"},
+        "headers": {"authorization": "Bearer t"},
+    }
+
+    assert await _hook(module, kwargs) is None
+
+
+def _credentialed_kwargs():
+    return _kwargs(
+        headers={"Authorization": "Bearer t", "x-api-key": "k", "anthropic-beta": "oauth-2025-04-20", "x-keep": "1"},
+        extra_headers={"authorization": "Bearer t", "x-keep": "1"},
+        provider_specific_header=[
+            {"custom_llm_provider": "anthropic", "extra_headers": {"authorization": "Bearer t", "x-keep": "1"}}
+        ],
+    )
+
+
+async def test_drops_all_client_header_containers_if_scrubbing_fails(module, monkeypatch):
+    def boom(_headers):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(module, "_scrub", boom)
+    kwargs = _credentialed_kwargs()
+    original = dict(kwargs)
+    snapshot = repr(kwargs)
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {}
+    assert out["extra_headers"] == {}
+    assert not out["provider_specific_header"]
+    rendered = repr(out).lower()
+    for needle in ("authorization", "x-api-key", "oauth-", "bearer"):
+        assert needle not in rendered
+    assert out["model"] == kwargs["model"]
+    assert repr(kwargs) == snapshot
+    assert kwargs["headers"] is original["headers"]
+
+
+async def test_leaves_other_groups_untouched_if_scrubbing_would_fail(module, monkeypatch):
+    def boom(_headers):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(module, "_scrub", boom)
+
+    assert await _hook(module, _kwargs(group="anthropic/claude-x", headers={"authorization": "Bearer t"})) is None
+
+
+async def test_leaves_kwargs_untouched_if_the_deployment_lookup_fails(module):
+    class Exploding(_ReadOnlyMapping):
+        def get(self, key, default=None):
+            raise RuntimeError("boom")
+
+    kwargs = {"litellm_metadata": Exploding({}), "headers": {"authorization": "Bearer t"}}
+
+    assert await _hook(module, kwargs) is None
