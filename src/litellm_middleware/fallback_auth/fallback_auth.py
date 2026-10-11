@@ -5,23 +5,31 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..pipeline import MiddlewarePipeline
+
+_log_warning = MiddlewarePipeline._log_warning
+
 _GROUP_PREFIX = "anthropic-api/"
 _CREDENTIAL_HEADERS = frozenset({"authorization", "x-api-key"})
 _OAUTH_BETA_PREFIX = "oauth-"
+_LITELLM_METADATA_CALLS = frozenset({"anthropic_messages", "aanthropic_messages", "aresponses", "responses"})
+_METADATA_CALLS = frozenset({"acompletion", "completion", "atext_completion", "text_completion"})
 
 
 class FallbackAuthMiddleware:
     async def async_pre_call_deployment_hook(self, kwargs: dict, call_type: Any = None) -> dict | None:  # NOSONAR
         try:
-            is_fallback = _is_fallback_group(kwargs)
-        except Exception:  # noqa: BLE001
+            is_fallback = _is_fallback_group(kwargs, call_type)
+        except Exception as exc:  # noqa: BLE001
+            _log_warning("fallback auth could not identify the deployment: %s", type(exc).__name__)
             return None
         if not is_fallback:
             return None
 
         try:
             return _scrubbed(kwargs)
-        except Exception:  # noqa: BLE001 - any scrub failure must still drop the client headers
+        except Exception as exc:  # noqa: BLE001 - any scrub failure must still drop the client headers
+            _log_warning("fallback auth scrub failed, dropping client headers: %s", type(exc).__name__)
             return {**kwargs, "headers": {}, "extra_headers": {}, "provider_specific_header": None}
 
 
@@ -47,14 +55,18 @@ def _scrubbed(kwargs: dict) -> dict | None:
     return {**kwargs, **changes} if changes else None
 
 
-def _is_fallback_group(kwargs: dict) -> bool:
-    buckets = [b for b in (kwargs.get("litellm_metadata"), kwargs.get("metadata")) if isinstance(b, Mapping)]
-    for field in ("deployment_model_name", "model_group"):
-        for metadata in buckets:
-            name = metadata.get(field)
-            if isinstance(name, str):
-                return name.startswith(_GROUP_PREFIX)
-    return False
+def _is_fallback_group(kwargs: dict, call_type: Any) -> bool:
+    call = getattr(call_type, "value", call_type)
+    if call in _LITELLM_METADATA_CALLS:
+        bucket = kwargs.get("litellm_metadata")
+    elif call in _METADATA_CALLS:
+        bucket = kwargs.get("metadata")
+    else:
+        return False
+    if not isinstance(bucket, Mapping):
+        return False
+    name = bucket.get("deployment_model_name")
+    return isinstance(name, str) and name.startswith(_GROUP_PREFIX)
 
 
 def _scrub_entry(entry: Any) -> dict | None:
@@ -71,7 +83,7 @@ def _scrub(headers: Any) -> dict | None:
         lowered = _lowered(name)
         if lowered in _CREDENTIAL_HEADERS:
             continue
-        if lowered == "anthropic-beta" and isinstance(value, (str, list, tuple)):
+        if lowered == "anthropic-beta" and isinstance(value, (str, bytes, list, tuple)):
             remaining = _without_oauth_tokens(value)
             if remaining:
                 cleaned[name] = remaining
@@ -86,11 +98,17 @@ def _lowered(name: Any) -> Any:
     return name.lower() if isinstance(name, str) else name
 
 
-def _without_oauth_tokens(beta: str | list | tuple) -> str | list | tuple:
-    if isinstance(beta, str):
-        return _without_oauth_tokens_str(beta)
-    parts = [_without_oauth_tokens_str(part) if isinstance(part, str) else part for part in beta]
+def _without_oauth_tokens(beta: str | bytes | list | tuple) -> str | bytes | list | tuple:
+    if isinstance(beta, (str, bytes)):
+        return _without_oauth_tokens_scalar(beta)
+    parts = [_without_oauth_tokens_scalar(part) if isinstance(part, (str, bytes)) else part for part in beta]
     return type(beta)(part for part in parts if part)
+
+
+def _without_oauth_tokens_scalar(beta: str | bytes) -> str | bytes:
+    if isinstance(beta, bytes):
+        return _without_oauth_tokens_str(beta.decode("latin-1")).encode("latin-1")
+    return _without_oauth_tokens_str(beta)
 
 
 def _without_oauth_tokens_str(beta: str) -> str:
