@@ -134,6 +134,42 @@ async def test_drops_oauth_beta_tokens_regardless_of_case(module):
     assert out["headers"] == {"anthropic-beta": "Foo-Bar"}
 
 
+async def test_scrubs_header_names_given_as_bytes(module):
+    kwargs = _kwargs(
+        headers={
+            b"Authorization": "Bearer t",
+            b"X-Api-Key": "k",
+            b"anthropic-beta": "oauth-2025-04-20,foo",
+            b"x-keep": "1",
+        }
+    )
+
+    out = await _hook(module, kwargs)
+
+    assert out["headers"] == {b"anthropic-beta": "foo", b"x-keep": "1"}
+
+
+@pytest.mark.parametrize("container", [list, tuple])
+async def test_drops_oauth_tokens_from_sequence_beta_values(module, container):
+    beta = container(["oauth-2025-04-20", "claude-code-20250219", "OAuth-x, foo"])
+
+    out = await _hook(module, _kwargs(headers={"anthropic-beta": beta}))
+
+    assert out["headers"] == {"anthropic-beta": container(["claude-code-20250219", "foo"])}
+    assert type(out["headers"]["anthropic-beta"]) is container
+
+
+@pytest.mark.parametrize("container", [list, tuple])
+async def test_drops_the_beta_header_when_a_sequence_value_holds_only_oauth_tokens(module, container):
+    out = await _hook(module, _kwargs(headers={"anthropic-beta": container(["oauth-2025-04-20"]), "x-keep": "1"}))
+
+    assert out["headers"] == {"x-keep": "1"}
+
+
+async def test_leaves_a_sequence_beta_value_without_oauth_tokens(module):
+    assert await _hook(module, _kwargs(headers={"anthropic-beta": ["foo", "bar"]})) is None
+
+
 @pytest.mark.parametrize("group", ["anthropic/claude-x", "claude-x", "anthropic-apix/claude-x", None, 5])
 async def test_leaves_other_model_groups_untouched(module, group):
     kwargs = _kwargs(

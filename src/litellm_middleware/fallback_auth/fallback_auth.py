@@ -14,7 +14,7 @@ class FallbackAuthMiddleware:
     async def async_pre_call_deployment_hook(self, kwargs: dict, call_type: Any = None) -> dict | None:  # NOSONAR
         try:
             is_fallback = _is_fallback_group(kwargs)
-        except Exception:  # noqa: BLE001 - an unidentifiable deployment is left untouched
+        except Exception:  # noqa: BLE001
             return None
         if not is_fallback:
             return None
@@ -68,10 +68,10 @@ def _scrub(headers: Any) -> dict | None:
 
     cleaned: dict = {}
     for name, value in headers.items():
-        lowered = name.lower() if isinstance(name, str) else name
+        lowered = _lowered(name)
         if lowered in _CREDENTIAL_HEADERS:
             continue
-        if lowered == "anthropic-beta" and isinstance(value, str):
+        if lowered == "anthropic-beta" and isinstance(value, (str, list, tuple)):
             remaining = _without_oauth_tokens(value)
             if remaining:
                 cleaned[name] = remaining
@@ -80,7 +80,20 @@ def _scrub(headers: Any) -> dict | None:
     return cleaned if cleaned != headers else None
 
 
-def _without_oauth_tokens(beta: str) -> str:
+def _lowered(name: Any) -> Any:
+    if isinstance(name, bytes):
+        name = name.decode("latin-1")
+    return name.lower() if isinstance(name, str) else name
+
+
+def _without_oauth_tokens(beta: str | list | tuple) -> str | list | tuple:
+    if isinstance(beta, str):
+        return _without_oauth_tokens_str(beta)
+    parts = [_without_oauth_tokens_str(part) if isinstance(part, str) else part for part in beta]
+    return type(beta)(part for part in parts if part)
+
+
+def _without_oauth_tokens_str(beta: str) -> str:
     tokens = [token.strip() for token in beta.split(",")]
     if not any(_is_oauth_token(t) for t in tokens):
         return beta
