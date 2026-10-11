@@ -277,7 +277,6 @@ async def test_response_headers_hook_can_fail_closed(pipeline_module):
 
 
 def test_response_headers_hook_is_defined_on_the_pipeline_class_itself(pipeline_module):
-    # LiteLLM only runs this hook when the leaf class's __dict__ defines it.
     assert "async_post_call_response_headers_hook" in pipeline_module.MiddlewarePipeline.__dict__
 
 
@@ -637,5 +636,4 @@ async def test_deployment_hook_ignores_unsupported_results(pipeline_module, fake
 
 
 def test_deployment_hook_is_defined_on_the_pipeline_class_itself(pipeline_module):
-    # LiteLLM only runs this hook when the leaf class's __dict__ defines it.
     assert "async_pre_call_deployment_hook" in pipeline_module.MiddlewarePipeline.__dict__
