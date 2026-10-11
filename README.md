@@ -105,6 +105,8 @@ LiteLLM attaches the client's `Authorization` header to the request before routi
 
 - The deployment's model name comes from `deployment_model_name` in `kwargs["litellm_metadata"]` (`/v1/messages`) or `kwargs["metadata"]`, which the router sets from the chosen deployment on every attempt. If it is missing, `model_group` (the requested name) is used. The headers come from `kwargs["headers"]`, `kwargs["extra_headers"]` and the `extra_headers` of each `kwargs["provider_specific_header"]` entry.
 - It returns copies, so the kwargs the router reuses for the next attempt are unchanged.
+- If scrubbing raises for an `anthropic-api/*` deployment, all three header containers (`headers`, `extra_headers`, `provider_specific_header`) are dropped from the returned copy. If the deployment name cannot be read, the kwargs are left as they are.
+- Because the pipeline defines `async_pre_call_deployment_hook`, the synchronous `litellm.responses` path also takes the hook branch (`_run_sync_responses_pre_call_deployment_hook` in `llm_http_handler.py`). The proxy uses the async path, so it is unaffected.
 - Not covered: with `forward_llm_provider_auth_headers` on, a client `x-api-key` becomes the top-level `kwargs["api_key"]`, which this middleware does not touch.
 - Remove it once LiteLLM stops letting a forwarded client token override a deployment's `api_key`.
 
