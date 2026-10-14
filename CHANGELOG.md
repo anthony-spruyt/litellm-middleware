@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.2.0...v1.3.0) (2026-10-14)
+
+
+### Features
+
+* **tool-guard:** label tool results too big to scan ([225cc17](https://github.com/anthony-spruyt/litellm-middleware/commit/225cc17f3beb70e1cd8972ec3113848dc167f1fc))
+
 ## [1.2.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.1.0...v1.2.0) (2026-10-11)
 
 
