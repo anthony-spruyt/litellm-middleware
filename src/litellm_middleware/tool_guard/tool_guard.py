@@ -11,7 +11,7 @@ from litellm._logging import verbose_proxy_logger
 
 from ..pipeline import MiddlewarePipeline
 from .batches import Batch, batches
-from .tool_results import FLAGGED, UNCHECKED, ToolResult, find, rewrite
+from .tool_results import FLAGGED, TOO_BIG, UNCHECKED, ToolResult, find, rewrite
 
 DEFAULT_TIMEOUT_SECONDS = 3.0
 DEFAULT_MAX_TEXT_BYTES = 256 * 1024
@@ -100,15 +100,17 @@ class ToolGuardMiddleware:
         oversized = {r.hash for r in results if len(r.text.encode("utf-8", "surrogatepass")) > self.max_text_bytes}
         scannable = [r for r in results if r.hash not in oversized]
         verdicts = await self._scan(scannable) if scannable else {}
-        verdicts.update(dict.fromkeys(oversized, UNCHECKED))
+        verdicts.update(dict.fromkeys(oversized, TOO_BIG))
         hits = [r for r in results if r.hash in verdicts]
         marked = [(r, verdicts[r.hash]) for r in hits if r.wrappable]
         if hits:
             flagged = sum(verdicts[r.hash] == FLAGGED for r in hits)
+            too_big = sum(verdicts[r.hash] == TOO_BIG for r in hits)
             _log_info(
-                "tool guard flagged %d and could not check %d tool result(s), marked %d",
+                "tool guard flagged %d, could not check %d and found %d too big tool result(s), marked %d",
                 flagged,
-                len(hits) - flagged,
+                len(hits) - flagged - too_big,
+                too_big,
                 len(marked),
             )
         return rewrite(items, marked) if marked else items
