@@ -43,7 +43,6 @@ uv run ruff check . && uv run ruff format --check .
 - **Unit** tests run each middleware against a stubbed `litellm`. They are fast, but they can't catch LiteLLM renaming a hook or changing its signature or call order.
 - **Integration** tests need a container runtime. They build the `Dockerfile`, unpack the image's files, and mount them read-only into the pinned LiteLLM image at the same path and with the same `PYTHONPATH` as production. A fake upstream (Anthropic and OpenAI formats) and a fake tool-guard scanner run in the same container. Each test sends a real request and checks what reached the upstream and what came back.
 - CI runs both suites on Python 3.13, the LiteLLM image's interpreter (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
-- CI builds and publishes the image with outbound network limited to GitHub, the container registries and the hosts listed under `egress` in `metadata.yaml`.
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
 - The test proxy only sets the `general_settings` keys the middleware depends on (`include_call_id_in_error_body`). It has no database, Redis or network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key falls through to the master key.
@@ -80,6 +79,8 @@ spec:
 Image volumes need a cluster and container runtime that support them. Without them, copy `src/litellm_middleware/` into a directory on `PYTHONPATH`.
 
 After a rollout, check the LiteLLM logs for `failed to load <registry-name> middleware`.
+
+CI builds and publishes the image with outbound network limited to GitHub, Sigstore, the container registries and the hosts listed under `egress` in `metadata.yaml`.
 
 ## LiteLLM version coupling
 
