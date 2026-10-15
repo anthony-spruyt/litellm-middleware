@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.3.0...v1.3.1) (2026-10-15)
+
+
+### Documentation
+
+* **readme:** note the CI network limits ([#72](https://github.com/anthony-spruyt/litellm-middleware/issues/72)) ([a5737b2](https://github.com/anthony-spruyt/litellm-middleware/commit/a5737b2b06a9278cbcf0b74f6508d3d10aea4e09))
+
 ## [1.3.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.2.0...v1.3.0) (2026-10-14)
 
 
