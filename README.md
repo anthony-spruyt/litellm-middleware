@@ -80,6 +80,8 @@ Image volumes need a cluster and container runtime that support them. Without th
 
 After a rollout, check the LiteLLM logs for `failed to load <registry-name> middleware`.
 
+CI builds and publishes the image with outbound network limited to GitHub, Sigstore, the container registries and the hosts listed under `egress` in `metadata.yaml`.
+
 ## LiteLLM version coupling
 
 The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden_params`, and `proxy_server._try_provider_token_count`. These change between LiteLLM releases without notice.
