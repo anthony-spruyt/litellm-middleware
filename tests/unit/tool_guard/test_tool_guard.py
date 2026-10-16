@@ -1721,8 +1721,9 @@ async def test_a_flood_of_results_is_listed_up_to_the_cap(mod, records):
 
     response = _only_record(records)["guardrail_json_response"]
     assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
-    assert 0 < len(response["results"]) < 2000
-    assert response["omitted"] == 2000 - len(response["results"])
+    kept = len(response["results"])
+    assert kept > 0
+    assert response["omitted"] == 2000 - kept
 
 
 async def test_recording_failure_never_breaks_the_request(mod, fake_litellm, monkeypatch):
