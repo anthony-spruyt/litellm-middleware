@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.5.0...v1.6.0) (2026-10-16)
+
+
+### Features
+
+* **tool-guard:** put the notice outside the untrusted-output wrapper ([#83](https://github.com/anthony-spruyt/litellm-middleware/issues/83)) ([50dca1e](https://github.com/anthony-spruyt/litellm-middleware/commit/50dca1ea9a9d86d0df37a6956088edfe0b7f80fa))
+
 ## [1.5.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.4.0...v1.5.0) (2026-10-16)
 
 
