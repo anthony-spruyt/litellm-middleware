@@ -126,3 +126,45 @@ def test_clean_tool_result_is_recorded_as_success(proxy, database_key):
     entry = _tool_guard_entry(proxy, request_id)
     assert entry["guardrail_status"] == "success"
     assert entry["guardrail_response"]["results"] == []
+
+
+def _monitor_row_id(proxy) -> str:
+    resp = proxy.client.get("/guardrails/usage/overview")
+    assert resp.status_code == 200, resp.text
+    ids = [row["id"] for row in resp.json()["rows"] if row["name"] == "tool-guard"]
+    assert len(ids) == 1, resp.text
+    return ids[0]
+
+
+def test_monitor_detail_page_loads_for_the_registered_guardrail(proxy, database_key):
+    nonce = uuid.uuid4().hex
+    request_id = _send(proxy, database_key, _body(nonce, [("Bash", "toolu_flagged", MARKER)]))
+    _tool_guard_entry(proxy, request_id)
+    guardrail_id = _monitor_row_id(proxy)
+
+    detail = proxy.client.get(f"/guardrails/usage/detail/{guardrail_id}")
+
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["guardrail_name"] == "tool-guard"
+
+    def monitor_log():
+        resp = proxy.client.get("/guardrails/usage/logs", params={"guardrail_id": guardrail_id})
+        assert resp.status_code == 200, resp.text
+        return [log for log in resp.json()["logs"] if log["id"] == request_id]
+
+    [log] = _eventually(monitor_log, "Guardrails Monitor log row for the registered guardrail")
+    assert log["action"] == "flagged"
+
+
+def test_opting_in_to_the_placeholder_changes_nothing_and_adds_no_second_record(proxy, database_key):
+    body = _body(uuid.uuid4().hex, [("Bash", "toolu_flagged", MARKER)])
+    opted_in = {**body, "guardrails": ["tool-guard"]}
+
+    plain_id = _send(proxy, database_key, body)
+    opted_in_id = _send(proxy, database_key, opted_in)
+
+    plain, opted = _tool_guard_entry(proxy, plain_id), _tool_guard_entry(proxy, opted_in_id)
+    assert opted["guardrail_status"] == plain["guardrail_status"]
+    assert opted["guardrail_response"] == plain["guardrail_response"]
+    received = proxy.upstream_received()
+    assert received[-1]["body"] == received[-2]["body"]

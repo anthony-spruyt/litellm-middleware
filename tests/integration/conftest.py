@@ -116,6 +116,16 @@ def _config() -> str:
                 },
             ],
             "litellm_settings": {"callbacks": [CALLBACK]},
+            "guardrails": [
+                {
+                    "guardrail_name": "tool-guard",
+                    "litellm_params": {
+                        "guardrail": "litellm_middleware.tool_guard.placeholder.ToolGuardPlaceholder",
+                        "mode": "pre_call",
+                        "default_on": False,
+                    },
+                }
+            ],
             "router_settings": {
                 "fallbacks": [{SUBSCRIPTION_MODEL: [API_KEY_MODEL]}],
                 "model_group_alias": {ALIASED_API_KEY_MODEL: API_KEY_MODEL},

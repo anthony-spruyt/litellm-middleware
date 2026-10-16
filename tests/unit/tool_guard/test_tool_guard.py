@@ -51,8 +51,9 @@ def _fake_custom_guardrail():
     module.records = []
 
     class CustomGuardrail:
-        def __init__(self, guardrail_name=None):
+        def __init__(self, guardrail_name=None, **kwargs):
             self.guardrail_name = guardrail_name
+            self.kwargs = kwargs
 
         def add_standard_logging_guardrail_information_to_request_data(self, **kwargs):
             module.records.append({"guardrail_name": self.guardrail_name, **kwargs})
@@ -1922,3 +1923,29 @@ async def test_each_format_records_its_tool(mod, records, call_type, data, expec
     [entry] = _only_record(records)["guardrail_json_response"]["results"]
     actual = (entry["tool_name"], entry["tool_call_id"])
     assert actual == expected
+
+
+@pytest.fixture
+def placeholder(fake_litellm):
+    sys.modules.pop("litellm_middleware.tool_guard.placeholder", None)
+    return importlib.import_module("litellm_middleware.tool_guard.placeholder")
+
+
+def test_placeholder_is_built_by_litellm_from_the_guardrail_entry(placeholder):
+    guardrail = placeholder.ToolGuardPlaceholder(guardrail_name="tool-guard", event_hook="pre_call", default_on=False)
+
+    custom_guardrail = sys.modules["litellm.integrations.custom_guardrail"]
+    assert isinstance(guardrail, custom_guardrail.CustomGuardrail)
+    assert guardrail.guardrail_name == "tool-guard"
+
+
+def test_placeholder_defines_no_hooks_of_its_own(placeholder):
+    hooks = [name for name, value in vars(placeholder.ToolGuardPlaceholder).items() if callable(value)]
+
+    assert hooks == []
+
+
+def test_placeholder_writes_no_record(placeholder, records):
+    placeholder.ToolGuardPlaceholder(guardrail_name="tool-guard", event_hook="pre_call", default_on=False)
+
+    assert records == []

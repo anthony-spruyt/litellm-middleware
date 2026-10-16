@@ -183,3 +183,16 @@ The entry's `confidence_score` is the highest score among the new flagged result
 `guardrail_response` holds a `summary` string and a `results` list with one item per new result that has a verdict: `tool_name`, `tool_call_id`, `verdict` (`suspected-prompt-injection`, `scanner-error`, `unchecked` or `too-big`), `score` and `text`. `text` is only set for `suspected-prompt-injection`, cut to 32 KiB (head and tail around a `...[N bytes cut]...` marker). The whole response is kept under 64 KiB: past that, texts shrink further and then trailing results are dropped and counted in `omitted`.
 
 LiteLLM replaces `guardrail_response` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status and `confidence_score`, but not the summary, the per-result text or the tool names. The setting also stores request and response bodies in the spend logs.
+
+The Guardrails Monitor opens a per-guardrail detail page from the overview row, and that page only loads for a guardrail LiteLLM has registered. `tool_guard/placeholder.py` ships `ToolGuardPlaceholder`, a `CustomGuardrail` with no hooks, so it never blocks, changes or records anything, even if a caller opts in with `guardrails: ["tool-guard"]`. The record still comes from the middleware. Register it in the proxy config; the dotted path resolves through `PYTHONPATH`, so it works with the mount described under Deployment:
+
+```yaml
+guardrails:
+  - guardrail_name: tool-guard
+    litellm_params:
+      guardrail: litellm_middleware.tool_guard.placeholder.ToolGuardPlaceholder
+      mode: pre_call
+      default_on: false
+```
+
+The `guardrail_name` must stay `tool-guard`: the overview row, the detail page and the logs list match the record by that name. Without the entry the overview row and Logs drawer still work, but the detail page shows "Failed to load guardrail details".
