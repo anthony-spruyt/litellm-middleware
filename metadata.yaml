@@ -1,5 +1,5 @@
 ---
-# The integration tests pull the pinned LiteLLM image from GHCR
+# The integration tests pull the pinned LiteLLM and Postgres images from GHCR
 egress:
   - ghcr.io:443
   - pkg-containers.githubusercontent.com:443

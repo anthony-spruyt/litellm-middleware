@@ -24,6 +24,7 @@ tests/
   unit/                        mirrors the package; litellm is stubbed
   integration/                 boots the real LiteLLM image
 litellm-image.yaml             the pinned LiteLLM image
+postgres-image.yaml            the pinned Postgres image for the integration tests
 Dockerfile                     package-only image
 ```
 
@@ -45,7 +46,7 @@ uv run ruff check . && uv run ruff format --check .
 - CI runs both suites on Python 3.13, the LiteLLM image's interpreter (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
-- The test proxy only sets the `general_settings` keys the middleware depends on (`include_call_id_in_error_body`). It has no database, Redis or network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key falls through to the master key.
+- The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval). It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
 - `count_tokens` ignores `api_base` and always calls `api.anthropic.com`, so its integration test calls the wrapped `_try_provider_token_count` inside the container instead of going over HTTP.
 
 ## Deployment
@@ -160,7 +161,38 @@ Scanner contract:
 ```text
 POST {TOOL_GUARD_URL}/v1/scan
 {"new": [{"hash": "sha256:...", "text": "..."}], "known": ["sha256:..."]}
--> {"flagged": ["sha256:..."], "unknown": ["sha256:..."]}
+-> {"flagged": ["sha256:..."], "unknown": ["sha256:..."], "scores": {"sha256:...": 0.97}}
 ```
 
 `unknown` lists `known` hashes the scanner has no verdict for. The middleware sends those results again with their text in follow-up calls, inside the same time limit, and wraps anything a call flags. Results in a call that fails, and in calls not sent before the time limit, are marked `unchecked`.
+
+`scores` is optional: a score for each flagged hash, as a finite number. A flagged hash without a usable score is recorded as a `scanner-error`, and the result is still wrapped.
+
+### LiteLLM UI record
+
+A request with at least one new tool result (one after the last assistant turn) gets one standard LiteLLM guardrail entry named `tool-guard`, so the verdicts show in the request's Logs drawer and in the Guardrails Monitor. Requests without a new tool result get none. Recording never fails the request: an error is logged as `tool guard record error: <type>` and skipped.
+
+| Status                        | When                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `guardrail_flagged`           | The scanner flagged a new result and gave it a score                                                    |
+| `guardrail_failed_to_respond` | No result is flagged with a score, and a new result is `unchecked`, `too-big` or a flag without a score |
+| `success`                     | Every new result was scanned and none was flagged                                                       |
+
+The entry's `confidence_score` is the highest score among the new flagged results. `guardrail_intervened` is never used, because the middleware wraps text and does not block.
+
+`guardrail_response` holds a `summary` string and a `results` list with one item per distinct new result that has a verdict: `tool_name`, `tool_call_id`, `verdict` (`suspected-prompt-injection`, `scanner-error`, `unchecked` or `too-big`), `score` and `text`. `text` is only set for `suspected-prompt-injection`, cut to 32 KiB (head and tail around a `...[N bytes cut]...` marker). The whole response is kept under 64 KiB: past that, texts shrink further and then trailing results are dropped and counted in `omitted`.
+
+LiteLLM replaces `guardrail_response` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status and `confidence_score`, but not the summary, the per-result text or the tool names. The setting also stores request and response bodies in the spend logs.
+
+The Guardrails Monitor opens a per-guardrail detail page from the overview row, and that page only loads for a guardrail LiteLLM has registered. `tool_guard/placeholder.py` ships `ToolGuardPlaceholder`, a `CustomGuardrail` with no hooks, so it never blocks, changes or records anything, even if a caller opts in with `guardrails: ["tool-guard"]`. The record still comes from the middleware. Register it in the proxy config; the dotted path resolves through `PYTHONPATH`, so it works with the mount described under Deployment:
+
+```yaml
+guardrails:
+  - guardrail_name: tool-guard
+    litellm_params:
+      guardrail: litellm_middleware.tool_guard.placeholder.ToolGuardPlaceholder
+      mode: pre_call
+      default_on: false
+```
+
+The `guardrail_name` must stay `tool-guard`: the overview row, the detail page and the logs list match the record by that name. Without the entry the overview row and Logs drawer still work, but the detail page shows "Failed to load guardrail details".
