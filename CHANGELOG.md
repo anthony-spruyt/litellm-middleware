@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.3.1...v1.4.0) (2026-10-16)
+
+
+### Features
+
+* **tool-guard:** record verdicts as a LiteLLM guardrail entry ([#75](https://github.com/anthony-spruyt/litellm-middleware/issues/75)) ([19e99b6](https://github.com/anthony-spruyt/litellm-middleware/commit/19e99b63056606add0e72191d48a3dd015383e29))
+
 ## [1.3.1](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.3.0...v1.3.1) (2026-10-15)
 
 
