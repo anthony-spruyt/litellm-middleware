@@ -180,9 +180,29 @@ A request with at least one new tool result (one after the last assistant turn) 
 
 The entry's `confidence_score` is the highest score among the new flagged results. `guardrail_intervened` is never used, because the middleware wraps text and does not block.
 
-`guardrail_response` holds a `summary` string and a `results` list with one item per distinct new result that has a verdict: `tool_name`, `tool_call_id`, `verdict` (`suspected-prompt-injection`, `scanner-error`, `unchecked` or `too-big`), `score` and `text`. `text` is only set for `suspected-prompt-injection`, cut to 32 KiB (head and tail around a `...[N bytes cut]...` marker). The whole response is kept under 64 KiB: past that, texts shrink further and then trailing results are dropped and counted in `omitted`.
+The Logs drawer shows the entry as a Match Details table with one row per distinct new result that has a verdict. Each row has a Type, Method, Action and Detail:
 
-LiteLLM replaces `guardrail_response` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status and `confidence_score`, but not the summary, the per-result text or the tool names. The setting also stores request and response bodies in the spend logs.
+| Column | Flagged result                                                    | `unchecked`, `too-big` or `scanner-error` result |
+| ------ | ----------------------------------------------------------------- | ------------------------------------------------ |
+| Type   | The tool name, or `tool` when the request does not name it        | Same                                             |
+| Method | `prompt-guard`                                                    | Same                                             |
+| Action | `FLAG`                                                            | `SKIP`                                           |
+| Detail | `[score]` and `<tool input> → <tool output>`, the score to 2 places | `[verdict]` and the tool input                   |
+
+The action is never `BLOCK`, because the middleware wraps text and does not block. The tool input and the output are each cut to 300 bytes (head and tail around a `...[N bytes cut]...` marker). The input is read from the matching call in the request: the `input` of an Anthropic `tool_use`, `server_tool_use` or `mcp_tool_use` block, a chat tool call's `function.arguments`, a Responses call's `arguments` (`input` for `custom_tool_call`), and a Gemini `functionCall`'s `args`, matched by call ID, or by name when the latest model turn called that name once. An input object with only a `command` string shows as that command; any other object shows as compact JSON. When the request does not give the input, the Detail shows only the output (flagged result) or is empty (skipped result).
+
+A flagged entry also sets:
+
+- `detection_method` to `prompt-guard`
+- `classification` to `{category: "suspected-prompt-injection", confidence, reason}`, where `confidence` is the highest score and `reason` names its tool, for example `Bash output scored 0.97`
+- `violation_categories` to `["suspected-prompt-injection"]`
+- `guardrail_action` to `FLAGGED`
+
+An entry with no flagged result sets only `detection_method`.
+
+`guardrail_response` holds a `summary` string and `counts`, the number of distinct new results per verdict (`suspected-prompt-injection`, `scanner-error`, `unchecked` and `too-big`). The whole record is kept under 64 KiB: past that, trailing rows are dropped and counted in `omitted`.
+
+LiteLLM replaces `guardrail_response`, `match_details` and `classification` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status, `confidence_score`, `detection_method`, `violation_categories` and `guardrail_action`, but not the summary, the Match Details rows or the classification. The setting also stores request and response bodies in the spend logs.
 
 The Guardrails Monitor opens a per-guardrail detail page from the overview row, and that page only loads for a guardrail LiteLLM has registered. `tool_guard/placeholder.py` ships `ToolGuardPlaceholder`, a `CustomGuardrail` with no hooks, so it never blocks, changes or records anything, even if a caller opts in with `guardrails: ["tool-guard"]`. The record still comes from the middleware. Register it in the proxy config; the dotted path resolves through `PYTHONPATH`, so it works with the mount described under Deployment:
 

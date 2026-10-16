@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import json
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -43,11 +46,12 @@ _RESPONSES_ASSISTANT = frozenset({"function_call", "custom_tool_call", *_RESPONS
 _CHAT_TOOL_ROLES = frozenset({"tool", "function"})
 _STREAM_FIELDS = ("stdout", "stderr")
 _GEMINI_RESPONSE_KEYS = ("functionResponse", "function_response")
+_GEMINI_CALL_KEYS = ("functionCall", "function_call")
 
 _TOOL_USES = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 
 _Slot = tuple[Any, Any, bool]
-Ident = tuple[str | None, str | None]
+Ident = tuple[str | None, str | None, str | None]
 Identify = Callable[["ToolResult"], Ident]
 
 
@@ -97,21 +101,21 @@ def find(items: list, call_type_format: str) -> list[ToolResult]:
 
 
 def identifier(items: list, call_type_format: str) -> Identify:
-    """Returns a function giving a found result's tool name and call ID; it indexes the request's tool calls once."""
+    """Returns a function giving a found result's tool name, call ID and call input; it indexes the tool calls once."""
     build, identity = _IDENTITIES[call_type_format]
-    names: dict[str, str] | None = None
+    calls: _Calls | None = None
 
     def identify(result: ToolResult) -> Ident:
-        nonlocal names
-        if names is None:
-            names = build(items)
-        return identity(items, result, names)
+        nonlocal calls
+        if calls is None:
+            calls = build(items)
+        return identity(items, result, calls)
 
     return identify
 
 
 def identify(items: list, call_type_format: str, result: ToolResult) -> Ident:
-    """Returns the tool name and tool call ID of a found result; either is None when the request does not say."""
+    """Returns a found result's tool name, call ID and call input; each is None when the request does not say."""
     return identifier(items, call_type_format)(result)
 
 
@@ -237,64 +241,128 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _name_map(calls: Iterator[tuple[Any, Any]]) -> dict[str, str]:
-    """Maps each call ID to the first non-empty name given for it."""
-    names: dict[str, str] = {}
-    for call_id, name in calls:
+@dataclass
+class _Call:
+    name: str
+    raw: Any
+
+    @functools.cached_property
+    def text(self) -> str | None:
+        """The call's input as text; rendered once, and only for calls whose result gets recorded."""
+        return _render(self.raw)
+
+
+_Calls = dict[str, _Call | None]
+
+
+def _render(value: Any) -> str | None:
+    """Renders a tool call's input as text: a lone `command` string as itself, other objects as compact JSON."""
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict) and value.keys() == {"command"} and isinstance(value["command"], str):
+        return value["command"] or None
+    if not isinstance(value, (dict, list)) or not value:
+        return None
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def _call_map(calls: Iterator[tuple[Any, Any, Any]]) -> _Calls:
+    """Maps each call ID to its first call that has a non-empty name."""
+    found: _Calls = {}
+    for call_id, name, raw in calls:
         if isinstance(call_id, str) and call_id and (text := _text(name)):
-            names.setdefault(call_id, text)
-    return names
+            found.setdefault(call_id, _Call(text, raw))
+    return found
 
 
-def _anthropic_names(items: list) -> dict[str, str]:
+def _known(calls: _Calls, call_id: str | None) -> tuple[str | None, str | None]:
+    call = calls.get(call_id) if call_id else None
+    return (call.name, call.text) if call else (None, None)
+
+
+def _anthropic_calls(items: list) -> _Calls:
     uses = (
         block
         for _, message in _dicts(items)
         for _, block in _dicts(message.get("content"))
         if block.get("type") in _TOOL_USES
     )
-    return _name_map((use.get("id"), use.get("name")) for use in uses)
+    return _call_map((use.get("id"), use.get("name"), use.get("input")) for use in uses)
 
 
-def _anthropic_identity(items: list, result: ToolResult, names: dict[str, str]) -> Ident:
+def _anthropic_identity(items: list, result: ToolResult, calls: _Calls) -> Ident:
     call_id = _text(_resolve(items, result.path).get("tool_use_id"))
-    return names.get(call_id) if call_id else None, call_id
+    name, tool_input = _known(calls, call_id)
+    return name, call_id, tool_input
 
 
-def _chat_names(items: list) -> dict[str, str]:
-    calls = (call for _, m in _dicts(items) for _, call in _dicts(m.get("tool_calls")))
+def _chat_calls(items: list) -> _Calls:
+    found = (call for _, m in _dicts(items) for _, call in _dicts(m.get("tool_calls")))
     functions = (
-        (call.get("id"), call["function"].get("name")) for call in calls if isinstance(call.get("function"), dict)
+        (call.get("id"), call["function"].get("name"), call["function"].get("arguments"))
+        for call in found
+        if isinstance(call.get("function"), dict)
     )
-    return _name_map(functions)
+    return _call_map(functions)
 
 
-def _chat_identity(items: list, result: ToolResult, names: dict[str, str]) -> Ident:
+def _chat_identity(items: list, result: ToolResult, calls: _Calls) -> Ident:
     message = _resolve(items, result.path)
     call_id = _text(message.get("tool_call_id"))
-    return (names.get(call_id) if call_id else None) or _text(message.get("name")), call_id
+    name, tool_input = _known(calls, call_id)
+    return name or _text(message.get("name")), call_id, tool_input
 
 
-def _responses_names(items: list) -> dict[str, str]:
-    calls = (call for _, call in _dicts(items) if call.get("type") in _RESPONSES_ASSISTANT)
-    return _name_map((call.get("call_id"), call.get("name")) for call in calls)
+def _responses_calls(items: list) -> _Calls:
+    found = (call for _, call in _dicts(items) if call.get("type") in _RESPONSES_ASSISTANT)
+    return _call_map((call.get("call_id"), call.get("name"), _responses_input(call)) for call in found)
 
 
-def _responses_identity(items: list, result: ToolResult, names: dict[str, str]) -> Ident:
+def _responses_input(call: dict) -> Any:
+    return call["arguments"] if "arguments" in call else call.get("input")
+
+
+def _responses_identity(items: list, result: ToolResult, calls: _Calls) -> Ident:
     item = _resolve(items, result.path)
     if item.get("type") in _RESPONSES_SERVER_RESULTS:
-        return _text(item.get("name")), _text(item.get("id"))
+        return _text(item.get("name")), _text(item.get("id")), _render(_responses_input(item))
     call_id = _text(item.get("call_id"))
-    return names.get(call_id) if call_id else None, call_id
+    name, tool_input = _known(calls, call_id)
+    return name, call_id, tool_input
 
 
-def _no_names(items: list) -> dict[str, str]:
-    return {}
+def _gemini_turn(content: dict) -> Iterator[dict]:
+    for _, part in _dicts(content.get("parts")):
+        for key in _GEMINI_CALL_KEYS:
+            call = part.get(key)
+            if isinstance(call, dict) and _text(call.get("name")):
+                yield call
 
 
-def _gemini_identity(items: list, result: ToolResult, names: dict[str, str]) -> Ident:
+def _gemini_calls(contents: list) -> _Calls:
+    """Indexes function calls by ID, and by name when the latest turn naming it called it once."""
+    found: _Calls = {}
+    for _, content in _dicts(contents):
+        turn = list(_gemini_turn(content))
+        counts = Counter(call["name"] for call in turn)
+        for call in turn:
+            entry = _Call(call["name"], call.get("args"))
+            if call_id := _text(call.get("id")):
+                found[f"id:{call_id}"] = entry
+            found[f"name:{call['name']}"] = entry if counts[call["name"]] == 1 else None
+    return found
+
+
+def _gemini_identity(items: list, result: ToolResult, calls: _Calls) -> Ident:
     response = _resolve(items, result.path)
-    return _text(response.get("name")), _text(response.get("id"))
+    name, call_id = _text(response.get("name")), _text(response.get("id"))
+    call = calls.get(f"id:{call_id}") if call_id else None
+    if call is None and name:
+        call = calls.get(f"name:{name}")
+    return name, call_id, call.text if call else None
 
 
 def _role(item: Any) -> Any:
@@ -365,11 +433,11 @@ def _is_model(item: Any) -> bool:
     return _role(item) == "model"
 
 
-_IDENTITIES: dict[str, tuple[Callable[[list], dict[str, str]], Callable[[list, ToolResult, dict[str, str]], Ident]]] = {
-    "anthropic": (_anthropic_names, _anthropic_identity),
-    "chat": (_chat_names, _chat_identity),
-    "responses": (_responses_names, _responses_identity),
-    "gemini": (_no_names, _gemini_identity),
+_IDENTITIES: dict[str, tuple[Callable[[list], _Calls], Callable[[list, ToolResult, _Calls], Ident]]] = {
+    "anthropic": (_anthropic_calls, _anthropic_identity),
+    "chat": (_chat_calls, _chat_identity),
+    "responses": (_responses_calls, _responses_identity),
+    "gemini": (_gemini_calls, _gemini_identity),
 }
 _WALKERS: dict[str, Callable[[Any, Any], list]] = {"content": _content_slots, "json": _json_slots}
 _Locator = Callable[[list], Iterator[_Located]]
