@@ -281,12 +281,11 @@ def test_marker_names_its_verdict_and_header(mod, tr, verdict, name, header):
 
     wrapped = tr.wrap("hello", digest, getattr(tr, verdict))
 
-    expected = (
+    assert wrapped == (
         f'<untrusted-tool-output id="{marker}" verdict="{name}">\n'
         f"{header}\nhello\n"
         f'</untrusted-tool-output id="{marker}">'
     )
-    assert wrapped == expected
 
 
 @pytest.mark.parametrize(
@@ -1921,4 +1920,5 @@ async def test_each_format_records_its_tool(mod, records, call_type, data, expec
     await _run(_guard(mod, Scanner()), data, call_type)
 
     [entry] = _only_record(records)["guardrail_json_response"]["results"]
-    assert (entry["tool_name"], entry["tool_call_id"]) == expected
+    actual = (entry["tool_name"], entry["tool_call_id"])
+    assert actual == expected
