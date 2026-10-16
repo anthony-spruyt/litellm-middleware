@@ -2017,7 +2017,7 @@ def _anthropic_call(tool_input, kind="tool_use"):
     ("tool_input", "expected"),
     [
         ({"command": "git status; echo rc=$?"}, "git status; echo rc=$?"),
-        ({"command": "ls", "description": "list"}, '{"command":"ls","description":"list"}'),
+        ({"command": "ls", "description": "list", "timeout": 5}, "ls"),
         ({"command": ["ls"]}, '{"command":["ls"]}'),
         ({"path": "é/a b"}, '{"path":"é/a b"}'),
         ({"nested": {"a": [1, None, True]}}, '{"nested":{"a":[1,null,true]}}'),
@@ -2084,9 +2084,50 @@ def test_tool_inputs_are_rendered_only_for_the_results_asked_about(mod, tr, monk
 
 def test_chat_tool_input_is_the_call_arguments(mod, tr):
     items = _chat_call("c1", "Bash", "r")["messages"]
-    items[1]["tool_calls"][0]["function"]["arguments"] = '{"command":"ls"}'
+    items[1]["tool_calls"][0]["function"]["arguments"] = '{"path":"README"}'
 
-    assert _identity(tr, items, "chat") == ("Bash", "c1", '{"command":"ls"}')
+    assert _identity(tr, items, "chat") == ("Bash", "c1", '{"path":"README"}')
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ('{"command":"ls"}', "ls"),
+        (' {"command": "ls -la", "description": "list", "timeout": 5}', "ls -la"),
+        ('{"command":["ls"]}', '{"command":["ls"]}'),
+        ('{"command":""}', None),
+        ("{}", "{}"),
+        ("ls -la", "ls -la"),
+        ("{not json", "{not json"),
+        ('["command"]', '["command"]'),
+        ('"command"', '"command"'),
+        ("", None),
+    ],
+)
+def test_chat_arguments_that_parse_to_a_command_object_show_the_command(mod, tr, arguments, expected):
+    items = _chat_call("c1", "Bash", "r")["messages"]
+    items[1]["tool_calls"][0]["function"]["arguments"] = arguments
+
+    assert _identity(tr, items, "chat") == ("Bash", "c1", expected)
+
+
+def test_chat_arguments_nested_too_deep_to_parse_stay_as_text(mod, tr):
+    items = _chat_call("c1", "Bash", "r")["messages"]
+    items[1]["tool_calls"][0]["function"]["arguments"] = '{"a":' * 100_000
+
+    _, _, shown = _identity(tr, items, "chat")
+
+    assert shown.startswith('{"a":{"a":')
+    assert len(shown.encode()) <= 300
+
+
+def test_gemini_args_with_a_command_show_the_command(mod, tr):
+    items = [
+        {"role": "model", "parts": [{"functionCall": {"name": "run", "args": {"command": "ls", "cwd": "/"}}}]},
+        {"role": "user", "parts": [{"functionResponse": {"name": "run", "response": {"out": "r"}}}]},
+    ]
+
+    assert _identity(tr, items, "gemini") == ("run", None, "ls")
 
 
 @pytest.mark.parametrize("kind", ["function_call", "custom_tool_call"])
@@ -2106,6 +2147,69 @@ def test_responses_mcp_call_tool_input_is_its_arguments(mod, tr):
     items[1]["arguments"] = '{"path":"README"}'
 
     assert _identity(tr, items, "responses") == ("read", "mcp_01", '{"path":"README"}')
+
+
+def test_responses_arguments_that_parse_to_a_command_object_show_the_command(mod, tr):
+    items = [
+        {"role": "user", "content": "go"},
+        {"type": "function_call", "call_id": "fc", "name": "shell", "arguments": '{"command":"ls","timeout":3}'},
+        {"type": "function_call_output", "call_id": "fc", "output": "r"},
+    ]
+
+    assert _identity(tr, items, "responses") == ("shell", "fc", "ls")
+
+
+def test_responses_mcp_call_arguments_that_parse_to_a_command_object_show_the_command(mod, tr):
+    items = _mcp_call()["input"]
+    items[1]["arguments"] = '{"command":"ls","description":"list"}'
+
+    assert _identity(tr, items, "responses") == ("read", "mcp_01", "ls")
+
+
+def _reused_id_turns(first, second):
+    return [
+        {"role": "user", "content": "go"},
+        first[0],
+        first[1],
+        {"role": "user", "content": "again"},
+        second[0],
+        second[1],
+    ]
+
+
+def test_anthropic_reused_call_id_uses_the_latest_call(mod, tr):
+    def turn(command, text):
+        use = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": command}}
+        result = {"type": "tool_result", "tool_use_id": "t1", "content": text}
+        return {"role": "assistant", "content": [use]}, {"role": "user", "content": [result]}
+
+    items = _reused_id_turns(turn("old", "r1"), turn("new", "r2"))
+
+    assert _identity(tr, items, "anthropic") == ("Bash", "t1", "new")
+
+
+def test_chat_reused_call_id_uses_the_latest_call(mod, tr):
+    def turn(command, text):
+        call = {"id": "c1", "type": "function", "function": {"name": "Bash", "arguments": command}}
+        return {"role": "assistant", "content": None, "tool_calls": [call]}, {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": text,
+        }
+
+    items = _reused_id_turns(turn("old", "r1"), turn("new", "r2"))
+
+    assert _identity(tr, items, "chat") == ("Bash", "c1", "new")
+
+
+def test_responses_reused_call_id_uses_the_latest_call(mod, tr):
+    def turn(command, text):
+        call = {"type": "function_call", "call_id": "fc", "name": "Bash", "arguments": command}
+        return call, {"type": "function_call_output", "call_id": "fc", "output": text}
+
+    items = _reused_id_turns(turn("old", "r1"), turn("new", "r2"))
+
+    assert _identity(tr, items, "responses") == ("Bash", "fc", "new")
 
 
 def _gemini_calls(*calls):
@@ -2275,6 +2379,49 @@ def test_tool_names_are_looked_up_without_rescanning_the_request_per_result(mod,
 
     assert len(made.detail["match_details"]) + made.response.get("omitted", 0) == count
     assert len(gets) <= 10 * count
+
+
+class _EncodeCounter(str):
+    encoded = 0
+
+    def encode(self, *args, **kwargs):
+        type(self).encoded += 1
+        return super().encode(*args, **kwargs)
+
+
+def _flagged_chat_results(tr, count, arguments):
+    calls = [{"id": "c1", "type": "function", "function": {"name": "Bash", "arguments": arguments}}]
+    items = [{"role": "user", "content": "go"}, {"role": "assistant", "content": None, "tool_calls": calls}]
+    items += [{"role": "tool", "tool_call_id": "c1", "content": f"{INJECTION} {i}"} for i in range(count)]
+    found = tr.find(items, "chat")
+    verdicts = {r.hash: tr.FLAGGED for r in found}
+    return items, found, verdicts
+
+
+def test_a_large_tool_input_shared_by_many_results_is_cut_once(mod, tr):
+    record = importlib.import_module("litellm_middleware.tool_guard.record")
+    counter = type("Counter", (_EncodeCounter,), {"encoded": 0})
+    items, found, verdicts = _flagged_chat_results(tr, 500, counter("A" * 100_000))
+
+    made = record.build(items, "chat", found, verdicts, dict.fromkeys(verdicts, 0.9))
+
+    assert counter.encoded == 1
+    assert made.detail["match_details"][0]["snippet"].startswith("A")
+
+
+def test_rows_are_built_only_until_the_record_is_full(mod, tr, monkeypatch):
+    record = importlib.import_module("litellm_middleware.tool_guard.record")
+    built = []
+    original = record._row
+    monkeypatch.setattr(record, "_row", lambda entry: built.append(entry) or original(entry))
+    items, found, verdicts = _flagged_chat_results(tr, 2000, "A" * 400)
+
+    made = record.build(items, "chat", found, verdicts, dict.fromkeys(verdicts, 0.9))
+
+    kept = len(made.detail["match_details"])
+    assert 0 < kept < 2000
+    assert made.response["omitted"] == 2000 - kept
+    assert len(built) <= kept + 1
 
 
 async def test_a_huge_score_is_dropped_without_affecting_other_flags(mod, records):

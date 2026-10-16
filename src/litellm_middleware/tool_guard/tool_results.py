@@ -10,6 +10,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
+MAX_PART_BYTES = 300
+MAX_IDENTITY_BYTES = 256
 _TAG = "untrusted-tool-output"
 FLAGGED = "suspected-prompt-injection"
 UNCHECKED = "unchecked"
@@ -134,6 +136,18 @@ def rewrite(items: list, marked: list[tuple[ToolResult, str]]) -> list:
     return out
 
 
+def cut(text: str, limit: int) -> str:
+    """Keeps the head and tail of text within limit UTF-8 bytes, naming the bytes cut between them."""
+    raw = text.encode("utf-8", "replace")
+    if len(raw) <= limit:
+        return raw.decode("utf-8")
+    keep = max(limit - len(f"...[{len(raw)} bytes cut]..."), 0)
+    head = raw[: keep // 2].decode("utf-8", "ignore")
+    tail = raw[len(raw) - (keep - keep // 2) :].decode("utf-8", "ignore")
+    cut_bytes = len(raw) - len(head.encode()) - len(tail.encode())
+    return f"{head}...[{cut_bytes} bytes cut]...{tail}"
+
+
 def _digest(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
@@ -247,19 +261,30 @@ class _Call:
     raw: Any
 
     @functools.cached_property
+    def label(self) -> str:
+        return cut(self.name, MAX_IDENTITY_BYTES)
+
+    @functools.cached_property
     def text(self) -> str | None:
-        """The call's input as text; rendered once, and only for calls whose result gets recorded."""
-        return _render(self.raw)
+        """The call's input as text cut to MAX_PART_BYTES; done once, and only for calls whose result gets recorded."""
+        return _shown(self.raw)
 
 
 _Calls = dict[str, _Call | None]
 
 
+def _shown(value: Any) -> str | None:
+    rendered = _render(value)
+    return None if rendered is None else cut(rendered, MAX_PART_BYTES)
+
+
 def _render(value: Any) -> str | None:
-    """Renders a tool call's input as text: a lone `command` string as itself, other objects as compact JSON."""
+    """Renders a tool call's input as text: an object's `command` string as itself, other objects as compact JSON."""
+    if isinstance(value, str):
+        value = _parsed(value)
     if isinstance(value, str):
         return value or None
-    if isinstance(value, dict) and value.keys() == {"command"} and isinstance(value["command"], str):
+    if isinstance(value, dict) and isinstance(value.get("command"), str):
         return value["command"] or None
     if not isinstance(value, (dict, list)) or not value:
         return None
@@ -269,18 +294,27 @@ def _render(value: Any) -> str | None:
         return None
 
 
+def _parsed(text: str) -> Any:
+    """Returns the object a JSON string holds when it has a `command` string; any other string comes back unchanged."""
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return text
+    return parsed if isinstance(parsed, dict) and isinstance(parsed.get("command"), str) else text
+
+
 def _call_map(calls: Iterator[tuple[Any, Any, Any]]) -> _Calls:
-    """Maps each call ID to its first call that has a non-empty name."""
+    """Maps each call ID to its latest call that has a non-empty name."""
     found: _Calls = {}
     for call_id, name, raw in calls:
         if isinstance(call_id, str) and call_id and (text := _text(name)):
-            found.setdefault(call_id, _Call(text, raw))
+            found[call_id] = _Call(text, raw)
     return found
 
 
 def _known(calls: _Calls, call_id: str | None) -> tuple[str | None, str | None]:
     call = calls.get(call_id) if call_id else None
-    return (call.name, call.text) if call else (None, None)
+    return (call.label, call.text) if call else (None, None)
 
 
 def _anthropic_calls(items: list) -> _Calls:
@@ -328,7 +362,7 @@ def _responses_input(call: dict) -> Any:
 def _responses_identity(items: list, result: ToolResult, calls: _Calls) -> Ident:
     item = _resolve(items, result.path)
     if item.get("type") in _RESPONSES_SERVER_RESULTS:
-        return _text(item.get("name")), _text(item.get("id")), _render(_responses_input(item))
+        return _text(item.get("name")), _text(item.get("id")), _shown(_responses_input(item))
     call_id = _text(item.get("call_id"))
     name, tool_input = _known(calls, call_id)
     return name, call_id, tool_input

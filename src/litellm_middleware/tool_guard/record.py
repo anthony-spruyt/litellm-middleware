@@ -5,9 +5,20 @@ from __future__ import annotations
 import functools
 import json
 from dataclasses import dataclass
+from operator import attrgetter
 from typing import Any
 
-from .tool_results import FLAGGED, TOO_BIG, UNCHECKED, Identify, ToolResult, identifier
+from .tool_results import (
+    FLAGGED,
+    MAX_IDENTITY_BYTES,
+    MAX_PART_BYTES,
+    TOO_BIG,
+    UNCHECKED,
+    Identify,
+    ToolResult,
+    cut,
+    identifier,
+)
 
 GUARDRAIL_NAME = "tool-guard"
 PROVIDER = "llm-tool-guard"
@@ -18,9 +29,7 @@ SKIP = "SKIP"
 GUARDRAIL_ACTION = "FLAGGED"
 UNNAMED_TOOL = "tool"
 ARROW = "\u2192"
-MAX_PART_BYTES = 300
 MAX_RESPONSE_BYTES = 64 * 1024
-MAX_IDENTITY_BYTES = 256
 _SLACK_BYTES = 256
 _FAILURES = (SCANNER_ERROR, UNCHECKED, TOO_BIG)
 _FAILURE_LABELS = {SCANNER_ERROR: "scanner error", UNCHECKED: "unchecked", TOO_BIG: "too big"}
@@ -71,11 +80,9 @@ def build(
         status = "success"
     response = {"summary": _summary(entries, len(new)), "counts": {v: _count(entries, v) for v in _VERDICTS}}
     detail: dict[str, Any] = {"detection_method": DETECTION_METHOD}
-    if entries:
-        detail["match_details"] = [_row(e) for e in entries]
     if flagged:
         detail.update(_flagged_detail(flagged))
-    return Record(status, *_fit(response, detail))
+    return Record(status, *_fit(response, detail, entries))
 
 
 def write(data: dict, record: Record, started: float, ended: float) -> None:
@@ -106,7 +113,7 @@ def _entry(identify: Identify, result: ToolResult, verdict: str, score: float | 
         verdict = SCANNER_ERROR
     name, _, tool_input = identify(result)
     return _Entry(
-        None if name is None else _cut(name, MAX_IDENTITY_BYTES),
+        None if name is None else cut(name, MAX_IDENTITY_BYTES),
         verdict,
         score,
         tool_input,
@@ -116,11 +123,11 @@ def _entry(identify: Identify, result: ToolResult, verdict: str, score: float | 
 
 def _row(entry: _Entry) -> dict[str, str]:
     """One Match Details row: the flagged ones show the tool input and its output, the others only the input."""
-    tool_input = "" if entry.tool_input is None else _cut(entry.tool_input, MAX_PART_BYTES)
-    if entry.text is None or entry.score is None:
+    tool_input = entry.tool_input or ""
+    if entry.text is None:
         action, category, snippet = SKIP, entry.verdict, tool_input
     else:
-        output = _cut(entry.text, MAX_PART_BYTES)
+        output = cut(entry.text, MAX_PART_BYTES)
         action, category = FLAG, f"{entry.score:.2f}"
         snippet = f"{tool_input} {ARROW} {output}" if tool_input else output
     return {
@@ -133,7 +140,7 @@ def _row(entry: _Entry) -> dict[str, str]:
 
 
 def _flagged_detail(flagged: list[_Entry]) -> dict[str, Any]:
-    top = max(flagged, key=_score)
+    top = max(flagged, key=attrgetter("score"))
     return {
         "confidence_score": top.score,
         "classification": {
@@ -144,10 +151,6 @@ def _flagged_detail(flagged: list[_Entry]) -> dict[str, Any]:
         "violation_categories": [FLAGGED],
         "guardrail_action": GUARDRAIL_ACTION,
     }
-
-
-def _score(entry: _Entry) -> float:
-    return entry.score if entry.score is not None else 0.0
 
 
 def _count(entries: list[_Entry], verdict: str) -> int:
@@ -171,38 +174,30 @@ def _summary(entries: list[_Entry], new_results: int) -> str:
 
 def _detail(flagged: list[_Entry]) -> str:
     if len(flagged) > 1:
-        return f" (max {max(_score(e) for e in flagged):.2f})"
-    name, score = flagged[0].tool_name, _score(flagged[0])
+        return f" (max {max(e.score for e in flagged):.2f})"
+    name, score = flagged[0].tool_name, flagged[0].score
     return f" ({name}, {score:.2f})" if name else f" ({score:.2f})"
-
-
-def _cut(text: str, limit: int) -> str:
-    """Keeps the head and tail of text within limit UTF-8 bytes, naming the bytes cut between them."""
-    raw = text.encode("utf-8", "replace")
-    if len(raw) <= limit:
-        return raw.decode("utf-8")
-    keep = max(limit - len(f"...[{len(raw)} bytes cut]..."), 0)
-    head = raw[: keep // 2].decode("utf-8", "ignore")
-    tail = raw[len(raw) - (keep - keep // 2) :].decode("utf-8", "ignore")
-    cut = len(raw) - len(head.encode()) - len(tail.encode())
-    return f"{head}...[{cut} bytes cut]...{tail}"
 
 
 def _size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False).encode("utf-8", "surrogatepass"))
 
 
-def _fit(response: dict[str, Any], detail: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Keeps the leading Match Details rows that fit MAX_RESPONSE_BYTES and counts the others in `omitted`."""
-    rows = detail.get("match_details", [])
-    base = _size({"response": response, "detail": {**detail, "match_details": []}, "omitted": len(rows)})
+def _fit(
+    response: dict[str, Any], detail: dict[str, Any], entries: list[_Entry]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Builds the leading Match Details rows that fit MAX_RESPONSE_BYTES, and counts the others in `omitted`."""
+    if not entries:
+        return response, detail
+    base = _size({"response": response, "detail": {**detail, "match_details": []}, "omitted": len(entries)})
     budget = MAX_RESPONSE_BYTES - base - _SLACK_BYTES
     kept: list[dict[str, str]] = []
-    for row in rows:
+    for entry in entries:
+        row = _row(entry)
         budget -= _size(row) + 2
         if budget < 0:
             break
         kept.append(row)
-    if len(kept) == len(rows):
-        return response, detail
-    return {**response, "omitted": len(rows) - len(kept)}, {**detail, "match_details": kept}
+    if len(kept) == len(entries):
+        return response, {**detail, "match_details": kept}
+    return {**response, "omitted": len(entries) - len(kept)}, {**detail, "match_details": kept}
