@@ -35,6 +35,7 @@ TOOL_GUARD_MAX_BATCH_BYTES = 4096
 STARTUP_TIMEOUT_S = 240
 MCP_SERVER = "itmcp"
 MCP_PORT = 8098
+SPEND_WRITE_INTERVAL_S = 2
 
 
 def _runner() -> list[str]:
@@ -55,6 +56,10 @@ def _free_port() -> int:
 
 def litellm_image() -> str:
     return yaml.safe_load((REPO_ROOT / "litellm-image.yaml").read_text())["image"]
+
+
+def postgres_image() -> str:
+    return yaml.safe_load((REPO_ROOT / "postgres-image.yaml").read_text())["image"]
 
 
 def export_package_image(dest: Path) -> None:
@@ -119,7 +124,10 @@ def _config() -> str:
                 "forward_client_headers_to_llm_api": True,
                 "include_call_id_in_error_body": True,
                 "master_key": MASTER_KEY,
-                # Gives GUARDED_KEY a key alias without a database; other keys fall through to the master key.
+                "proxy_batch_write_at": SPEND_WRITE_INTERVAL_S,
+                # Without it LiteLLM replaces guardrail_response in spend logs with a redaction marker.
+                "store_prompts_in_spend_logs": True,
+                # Gives GUARDED_KEY a key alias without the database; other keys go through LiteLLM's own auth.
                 "custom_auth": "fake_auth.user_api_key_auth",
                 "custom_auth_settings": {"mode": "auto"},
             },
@@ -150,6 +158,8 @@ def proxy(package_files, tmp_path_factory):
     name = f"litellm-it-{uuid.uuid4().hex[:8]}"
     port = _free_port()
     log_path = work / "proxy.log"
+    database = Postgres(f"{name}-db", _free_port(), work / "postgres.log")
+    database.start()
     # Foreground, not -d: --rm deletes a crashed container and its logs, so capture output ourselves.
     with log_path.open("w") as log:
         proc = subprocess.Popen(
@@ -174,6 +184,8 @@ def proxy(package_files, tmp_path_factory):
                 "ANTHROPIC_API_BASE=http://127.0.0.1:8099",
                 "-e",
                 "ANTHROPIC_API_KEY=it",
+                "-e",
+                f"DATABASE_URL={database.url}",
                 "-v",
                 f"{package_files}:{MOUNT_PATH}:ro",
                 "-v",
@@ -197,7 +209,7 @@ def proxy(package_files, tmp_path_factory):
             stderr=subprocess.STDOUT,
         )
 
-    proxy = Proxy(f"http://127.0.0.1:{port}", name, log_path)
+    proxy = Proxy(f"http://127.0.0.1:{port}", name, log_path, database)
     try:
         _wait_ready(proxy, proc)
         yield proxy
@@ -209,6 +221,7 @@ def proxy(package_files, tmp_path_factory):
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             proc.kill()
+        database.stop()
 
 
 def _wait_ready(proxy: Proxy, proc: subprocess.Popen) -> None:
@@ -225,11 +238,117 @@ def _wait_ready(proxy: Proxy, proc: subprocess.Popen) -> None:
     pytest.fail(f"LiteLLM not ready after {STARTUP_TIMEOUT_S}s:\n{proxy.logs()}")
 
 
+class Postgres:
+    """A throwaway Postgres in its own container, so the proxy writes spend logs like production."""
+
+    def __init__(self, name: str, port: int, log_path: Path) -> None:
+        self.name = name
+        self.port = port
+        self.log_path = log_path
+        self.host = "127.0.0.1"
+        self._proc: subprocess.Popen | None = None
+
+    @property
+    def url(self) -> str:
+        return f"postgresql://postgres@{self.host}:{self.port}/postgres"
+
+    def start(self) -> None:
+        # Same port both sides, like the proxy: host-network runners ignore the mapping.
+        command = (
+            "initdb -D /tmp/pgdata -U postgres -A trust -E UTF8 --locale=C.UTF-8 >/dev/null && "
+            "echo 'host all all all trust' >> /tmp/pgdata/pg_hba.conf && "
+            f"exec postgres -D /tmp/pgdata -p {self.port} -c listen_addresses=* "
+            "-c unix_socket_directories=/tmp -c fsync=off"
+        )
+        with self.log_path.open("w") as log:
+            self._proc = subprocess.Popen(
+                [
+                    *_runner(),
+                    "--name",
+                    self.name,
+                    "-p",
+                    f"127.0.0.1:{self.port}:{self.port}",
+                    "--entrypoint",
+                    "sh",
+                    postgres_image(),
+                    "-c",
+                    command,
+                ],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        self._wait_ready()
+        self.host = self._container_ip() or self.host
+
+    def stop(self) -> None:
+        subprocess.run([_cli(), "rm", "-f", self.name], capture_output=True, check=False)
+        if self._proc is not None:
+            try:
+                self._proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+
+    def _container_ip(self) -> str:
+        # Bridge networks give the container an address the proxy container can reach; host networking leaves it empty.
+        out = subprocess.run(
+            [_cli(), "inspect", self.name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return out.stdout.strip()
+
+    def _wait_ready(self) -> None:
+        deadline = time.monotonic() + STARTUP_TIMEOUT_S
+        while time.monotonic() < deadline:
+            probe = subprocess.run(
+                [_cli(), "exec", self.name, "pg_isready", "-h", "127.0.0.1", "-p", str(self.port)],
+                capture_output=True,
+                check=False,
+            )
+            if probe.returncode == 0:
+                return
+            if self._proc is not None and self._proc.poll() is not None:
+                pytest.fail(f"Postgres container exited during startup:\n{self.log_path.read_text()}")
+            time.sleep(1)
+        pytest.fail(f"Postgres not ready after {STARTUP_TIMEOUT_S}s:\n{self.log_path.read_text()}")
+
+    def query(self, sql: str) -> list[list[str]]:
+        """Runs sql and returns its rows as lists of strings."""
+        out = subprocess.run(
+            [
+                _cli(),
+                "exec",
+                self.name,
+                "psql",
+                "-h",
+                "127.0.0.1",
+                "-p",
+                str(self.port),
+                "-U",
+                "postgres",
+                "-X",
+                "-A",
+                "-t",
+                "-F",
+                "\t",
+                "-c",
+                sql,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert out.returncode == 0, out.stderr
+        return [line.split("\t") for line in out.stdout.splitlines() if line]
+
+
 class Proxy:
-    def __init__(self, base: str, name: str, log_path: Path) -> None:
+    def __init__(self, base: str, name: str, log_path: Path, database: Postgres) -> None:
         self.base = base
         self.name = name
         self.log_path = log_path
+        self.database = database
         self.client = httpx.Client(base_url=base, timeout=60, headers={"authorization": f"Bearer {MASTER_KEY}"})
 
     def logs(self) -> str:

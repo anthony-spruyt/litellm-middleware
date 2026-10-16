@@ -44,6 +44,8 @@ _CHAT_TOOL_ROLES = frozenset({"tool", "function"})
 _STREAM_FIELDS = ("stdout", "stderr")
 _GEMINI_RESPONSE_KEYS = ("functionResponse", "function_response")
 
+_TOOL_USES = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
+
 _Slot = tuple[Any, Any, bool]
 
 
@@ -90,6 +92,11 @@ def find(items: list, call_type_format: str) -> list[ToolResult]:
         new = path[0] >= turn if server else path[0] > last
         found.append(ToolResult(path, key, kind, _digest(text), text, new, any(w for _, _, w in slots)))
     return found
+
+
+def identify(items: list, call_type_format: str, result: ToolResult) -> tuple[str | None, str | None]:
+    """Returns the tool name and tool call ID of a found result; either is None when the request does not say."""
+    return _IDENTIFIERS[call_type_format](items, result)
 
 
 def rewrite(items: list, marked: list[tuple[ToolResult, str]]) -> list:
@@ -210,6 +217,49 @@ def _key_slot(field: Any) -> list:
     return _string((field,), 0, wrappable=False)
 
 
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _first_name(calls: Iterator[dict], call_id: str | None, id_key: str) -> str | None:
+    if call_id is None:
+        return None
+    return next((name for call in calls if call.get(id_key) == call_id if (name := _text(call.get("name")))), None)
+
+
+def _anthropic_identity(items: list, result: ToolResult) -> tuple[str | None, str | None]:
+    call_id = _text(_resolve(items, result.path).get("tool_use_id"))
+    uses = (
+        block
+        for _, message in _dicts(items)
+        for _, block in _dicts(message.get("content"))
+        if block.get("type") in _TOOL_USES
+    )
+    return _first_name(uses, call_id, "id"), call_id
+
+
+def _chat_identity(items: list, result: ToolResult) -> tuple[str | None, str | None]:
+    message = _resolve(items, result.path)
+    call_id = _text(message.get("tool_call_id"))
+    calls = (call for _, m in _dicts(items) for _, call in _dicts(m.get("tool_calls")))
+    named = ({**call, "name": call["function"].get("name")} for call in calls if isinstance(call.get("function"), dict))
+    return _first_name(named, call_id, "id") or _text(message.get("name")), call_id
+
+
+def _responses_identity(items: list, result: ToolResult) -> tuple[str | None, str | None]:
+    item = _resolve(items, result.path)
+    if item.get("type") in _RESPONSES_SERVER_RESULTS:
+        return _text(item.get("name")), _text(item.get("id"))
+    call_id = _text(item.get("call_id"))
+    calls = (call for _, call in _dicts(items) if call.get("type") in _RESPONSES_ASSISTANT)
+    return _first_name(calls, call_id, "call_id"), call_id
+
+
+def _gemini_identity(items: list, result: ToolResult) -> tuple[str | None, str | None]:
+    response = _resolve(items, result.path)
+    return _text(response.get("name")), _text(response.get("id"))
+
+
 def _role(item: Any) -> Any:
     return item.get("role") if isinstance(item, dict) else None
 
@@ -278,6 +328,12 @@ def _is_model(item: Any) -> bool:
     return _role(item) == "model"
 
 
+_IDENTIFIERS: dict[str, Callable[[list, ToolResult], tuple[str | None, str | None]]] = {
+    "anthropic": _anthropic_identity,
+    "chat": _chat_identity,
+    "responses": _responses_identity,
+    "gemini": _gemini_identity,
+}
 _WALKERS: dict[str, Callable[[Any, Any], list]] = {"content": _content_slots, "json": _json_slots}
 _Locator = Callable[[list], Iterator[_Located]]
 _FORMATS: dict[str, tuple[_Locator, Callable[[Any], bool]]] = {

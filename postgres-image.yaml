@@ -1,0 +1,2 @@
+# renovate: datasource=docker depName=ghcr.io/cloudnative-pg/postgresql
+image: "ghcr.io/cloudnative-pg/postgresql:17@sha256:3751df220f3dd3a01c07b532336a6ba63138cea302b9c2fea335de5ef375b1dc"
