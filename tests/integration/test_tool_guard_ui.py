@@ -11,7 +11,7 @@ from fake_scanner import MARKER, SCORE
 WAIT_SECONDS = 60
 
 
-def _body(nonce: str, results: list[tuple[str, str, str]]) -> dict:
+def _body(nonce: str, results: list[tuple[str, str, str]], command: str = "ls") -> dict:
     """An /v1/messages body whose last turn holds one new tool result per (tool name, call id, text)."""
     return {
         "model": MODEL,
@@ -20,7 +20,10 @@ def _body(nonce: str, results: list[tuple[str, str, str]]) -> dict:
             {"role": "user", "content": "run the tools"},
             {
                 "role": "assistant",
-                "content": [{"type": "tool_use", "id": cid, "name": name, "input": {}} for name, cid, _ in results],
+                "content": [
+                    {"type": "tool_use", "id": cid, "name": name, "input": {"command": command}}
+                    for name, cid, _ in results
+                ],
             },
             {
                 "role": "user",
@@ -74,7 +77,8 @@ def database_key(proxy) -> str:
 
 def test_flagged_tool_result_is_recorded_in_spend_logs_and_the_guardrails_monitor(proxy, database_key):
     nonce = uuid.uuid4().hex
-    body = _body(nonce, [("Bash", "toolu_flagged", MARKER), ("Read", "toolu_clean", "benign")])
+    command = f"cat notes-{nonce}.txt"
+    body = _body(nonce, [("Bash", "toolu_flagged", MARKER), ("Read", "toolu_clean", "benign")], command)
 
     request_id = _send(proxy, database_key, body)
 
@@ -83,13 +87,22 @@ def test_flagged_tool_result_is_recorded_in_spend_logs_and_the_guardrails_monito
     assert entry["guardrail_provider"] == "llm-tool-guard"
     assert entry["guardrail_mode"] == "pre_call"
     assert entry["confidence_score"] == SCORE
-    assert entry["guardrail_response"]["results"] == [
+    assert entry["detection_method"] == "prompt-guard"
+    assert entry["violation_categories"] == ["suspected-prompt-injection"]
+    assert entry["guardrail_action"] == "FLAGGED"
+    assert entry["classification"] == {
+        "category": "suspected-prompt-injection",
+        "confidence": SCORE,
+        "reason": f"Bash output scored {SCORE:.2f}",
+    }
+    assert entry["guardrail_response"]["counts"]["suspected-prompt-injection"] == 1
+    assert entry["match_details"] == [
         {
-            "tool_name": "Bash",
-            "tool_call_id": "toolu_flagged",
-            "verdict": "suspected-prompt-injection",
-            "score": SCORE,
-            "text": f"{MARKER} {nonce}",
+            "type": "Bash",
+            "detection_method": "prompt-guard",
+            "action_taken": "FLAG",
+            "category": f"{SCORE:.2f}",
+            "snippet": f"{command} \u2192 {MARKER} {nonce}",
         }
     ]
 
@@ -125,7 +138,8 @@ def test_clean_tool_result_is_recorded_as_success(proxy, database_key):
 
     entry = _tool_guard_entry(proxy, request_id)
     assert entry["guardrail_status"] == "success"
-    assert entry["guardrail_response"]["results"] == []
+    assert entry["guardrail_response"]["counts"]["suspected-prompt-injection"] == 0
+    assert "match_details" not in entry
 
 
 def _monitor_row_id(proxy) -> str:
