@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.4.0...v1.5.0) (2026-10-16)
+
+
+### Features
+
+* **tool-guard:** show verdicts as Match Details rows in the Logs drawer ([#78](https://github.com/anthony-spruyt/litellm-middleware/issues/78)) ([224543e](https://github.com/anthony-spruyt/litellm-middleware/commit/224543e4db2f80b2470739c12c3f5426152fabbb))
+
 ## [1.4.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.3.1...v1.4.0) (2026-10-16)
 
 
