@@ -201,11 +201,19 @@ def _scores(value: Any, flagged: list[str]) -> dict[str, float]:
     """Scores for flagged hashes; a scanner that sends none, or junk, leaves its flags unscored."""
     if not isinstance(value, dict):
         return {}
-    return {
-        h: float(s)
-        for h, s in value.items()
-        if h in flagged and isinstance(s, (int, float)) and not isinstance(s, bool) and math.isfinite(s)
-    }
+    wanted = set(flagged)
+    scores = {h: _score(s) for h, s in value.items() if h in wanted}
+    return {h: s for h, s in scores.items() if s is not None}
+
+
+def _score(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        score = float(value)
+    except OverflowError:
+        return None
+    return score if math.isfinite(score) else None
 
 
 def _default_client() -> Any:

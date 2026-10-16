@@ -46,7 +46,7 @@ uv run ruff check . && uv run ruff format --check .
 - CI runs both suites on Python 3.13, the LiteLLM image's interpreter (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
-- The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval). It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key falls through to the master key.
+- The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval). It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
 - `count_tokens` ignores `api_base` and always calls `api.anthropic.com`, so its integration test calls the wrapped `_try_provider_token_count` inside the container instead of going over HTTP.
 
 ## Deployment
@@ -172,15 +172,15 @@ POST {TOOL_GUARD_URL}/v1/scan
 
 A request with at least one new tool result (one after the last assistant turn) gets one standard LiteLLM guardrail entry named `tool-guard`, so the verdicts show in the request's Logs drawer and in the Guardrails Monitor. Requests without a new tool result get none. Recording never fails the request: an error is logged as `tool guard record error: <type>` and skipped.
 
-| Status                       | When                                                                                   |
-| ---------------------------- | -------------------------------------------------------------------------------------- |
-| `guardrail_flagged`          | The scanner flagged a new result and gave it a score                                   |
-| `guardrail_failed_to_respond`| No result is flagged with a score, and a new result is `unchecked`, `too-big` or a flag without a score |
-| `success`                    | Every new result was scanned and none was flagged                                      |
+| Status                        | When                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `guardrail_flagged`           | The scanner flagged a new result and gave it a score                                                    |
+| `guardrail_failed_to_respond` | No result is flagged with a score, and a new result is `unchecked`, `too-big` or a flag without a score |
+| `success`                     | Every new result was scanned and none was flagged                                                       |
 
 The entry's `confidence_score` is the highest score among the new flagged results. `guardrail_intervened` is never used, because the middleware wraps text and does not block.
 
-`guardrail_response` holds a `summary` string and a `results` list with one item per new result that has a verdict: `tool_name`, `tool_call_id`, `verdict` (`suspected-prompt-injection`, `scanner-error`, `unchecked` or `too-big`), `score` and `text`. `text` is only set for `suspected-prompt-injection`, cut to 32 KiB (head and tail around a `...[N bytes cut]...` marker). The whole response is kept under 64 KiB: past that, texts shrink further and then trailing results are dropped and counted in `omitted`.
+`guardrail_response` holds a `summary` string and a `results` list with one item per distinct new result that has a verdict: `tool_name`, `tool_call_id`, `verdict` (`suspected-prompt-injection`, `scanner-error`, `unchecked` or `too-big`), `score` and `text`. `text` is only set for `suspected-prompt-injection`, cut to 32 KiB (head and tail around a `...[N bytes cut]...` marker). The whole response is kept under 64 KiB: past that, texts shrink further and then trailing results are dropped and counted in `omitted`.
 
 LiteLLM replaces `guardrail_response` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status and `confidence_score`, but not the summary, the per-result text or the tool names. The setting also stores request and response bodies in the spend logs.
 

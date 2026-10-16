@@ -1949,3 +1949,102 @@ def test_placeholder_writes_no_record(placeholder, records):
     placeholder.ToolGuardPlaceholder(guardrail_name="tool-guard", event_hook="pre_call", default_on=False)
 
     assert records == []
+
+
+def _chat_call(call_id, name, text):
+    call = {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+    return {
+        "litellm_call_id": "call-1",
+        "messages": [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": None, "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": call_id, "content": text},
+        ],
+    }
+
+
+@pytest.mark.parametrize("field", ["tool_name", "tool_call_id"])
+async def test_a_huge_tool_name_or_call_id_is_capped_and_the_record_fits(mod, records, field):
+    huge = "n" * (70 * 1024)
+    name, call_id = (huge, "c1") if field == "tool_name" else ("Read", huge)
+
+    await _run(_guard(mod, Scanner()), _chat_call(call_id, name, INJECTION), "acompletion")
+
+    response = _only_record(records)["guardrail_json_response"]
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
+    [entry] = response["results"]
+    assert len(entry[field].encode()) <= 256
+    assert entry["verdict"] == "suspected-prompt-injection"
+    assert len(response["summary"].encode()) < 1024
+
+
+async def test_many_huge_names_still_fit_the_record(mod, records):
+    huge = "n" * (70 * 1024)
+    calls = [{"id": f"c{i}", "type": "function", "function": {"name": huge, "arguments": "{}"}} for i in range(300)]
+    messages = [{"role": "user", "content": "go"}, {"role": "assistant", "content": None, "tool_calls": calls}]
+    messages += [{"role": "tool", "tool_call_id": f"c{i}", "content": f"{INJECTION} {i}"} for i in range(300)]
+
+    await _run(_guard(mod, Scanner()), {"litellm_call_id": "call-1", "messages": messages}, "acompletion")
+
+    response = _only_record(records)["guardrail_json_response"]
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
+
+
+async def test_a_lone_surrogate_in_a_name_or_call_id_is_recorded(mod, records):
+    data = _chat_call("c\ud800", "Re\udc00ad", INJECTION)
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    [entry] = _only_record(records)["guardrail_json_response"]["results"]
+    entry["tool_name"].encode("utf-8")
+    entry["tool_call_id"].encode("utf-8")
+
+
+def test_record_size_counts_a_lone_surrogate(mod):
+    record = importlib.import_module("litellm_middleware.tool_guard.record")
+
+    assert record._size({"a": "\ud800"}) == len('{"a": "') + 3 + len('"}')
+
+
+class _CountingBlock(dict):
+    gets = 0
+
+    def get(self, *args):
+        type(self).gets += 1
+        return super().get(*args)
+
+
+def test_tool_names_are_looked_up_without_rescanning_the_request_per_result(mod, tr):
+    record = importlib.import_module("litellm_middleware.tool_guard.record")
+    count = 300
+    uses = [_CountingBlock(type="tool_use", id=f"u{i}", name="Read", input={}) for i in range(count)]
+    results = [{"type": "tool_result", "tool_use_id": f"r{i}", "content": f"{INJECTION} {i}"} for i in range(count)]
+    items = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": uses},
+        {"role": "user", "content": results},
+    ]
+    found = tr.find(items, "anthropic")
+    verdicts = {r.hash: tr.FLAGGED for r in found}
+    _CountingBlock.gets = 0
+
+    made = record.build(items, "anthropic", found, verdicts, dict.fromkeys(verdicts, 0.9))
+
+    assert len(made.response["results"]) == count
+    assert _CountingBlock.gets <= 10 * count
+
+
+async def test_a_huge_score_is_dropped_without_affecting_other_flags(mod, records):
+    first, second = _sha(INJECTION + " a"), _sha(INJECTION + " b")
+    body = f'{{"flagged": ["{first}", "{second}"], "scores": {{"{first}": {"9" * 400}, "{second}": 0.8}}}}'
+    data = _chat_history([], [INJECTION + " a", INJECTION + " b"])
+
+    out = await _run(_guard(mod, Scanner(body=body.encode())), data, "acompletion")
+
+    assert all(m["content"].startswith("<untrusted-tool-output") for m in out["messages"][-2:])
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_flagged"
+    assert {e["tool_call_id"]: (e["verdict"], e["score"]) for e in record["guardrail_json_response"]["results"]} == {
+        "n0": ("scanner-error", None),
+        "n1": ("suspected-prompt-injection", 0.8),
+    }

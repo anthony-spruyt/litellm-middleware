@@ -7,13 +7,14 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .tool_results import FLAGGED, TOO_BIG, UNCHECKED, ToolResult, identify
+from .tool_results import FLAGGED, TOO_BIG, UNCHECKED, Identify, ToolResult, identifier
 
 GUARDRAIL_NAME = "tool-guard"
 PROVIDER = "llm-tool-guard"
 SCANNER_ERROR = "scanner-error"
 MAX_TEXT_BYTES = 32 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
+MAX_IDENTITY_BYTES = 256
 _SLACK_BYTES = 256
 _FAILURES = (SCANNER_ERROR, UNCHECKED, TOO_BIG)
 _FAILURE_LABELS = {SCANNER_ERROR: "scanner error", UNCHECKED: "unchecked", TOO_BIG: "too big"}
@@ -39,11 +40,12 @@ def build(
         return None
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
+    identify = identifier(items, call_type_format)
     for result in new:
         if result.hash in seen or result.hash not in verdicts:
             continue
         seen.add(result.hash)
-        entries.append(_entry(items, call_type_format, result, verdicts[result.hash], scores.get(result.hash)))
+        entries.append(_entry(identify, result, verdicts[result.hash], scores.get(result.hash)))
     flagged = [e["score"] for e in entries if e["verdict"] == FLAGGED]
     if flagged:
         status = "guardrail_flagged"
@@ -78,13 +80,13 @@ def _guardrail() -> Any:
     return CustomGuardrail(guardrail_name=GUARDRAIL_NAME)
 
 
-def _entry(items: list, fmt: str, result: ToolResult, verdict: str, score: float | None) -> dict[str, Any]:
+def _entry(identify: Identify, result: ToolResult, verdict: str, score: float | None) -> dict[str, Any]:
     if verdict == FLAGGED and score is None:
         verdict = SCANNER_ERROR
-    name, call_id = identify(items, fmt, result)
+    name, call_id = identify(result)
     return {
-        "tool_name": name,
-        "tool_call_id": call_id,
+        "tool_name": None if name is None else _cut(name, MAX_IDENTITY_BYTES),
+        "tool_call_id": None if call_id is None else _cut(call_id, MAX_IDENTITY_BYTES),
         "verdict": verdict,
         "score": score,
         "text": result.text if verdict == FLAGGED else None,
@@ -126,7 +128,7 @@ def _cut(text: str, limit: int) -> str:
 
 
 def _size(value: Any) -> int:
-    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8", "surrogatepass"))
 
 
 def _fit(response: dict[str, Any]) -> dict[str, Any]:
@@ -148,10 +150,10 @@ def _fit(response: dict[str, Any]) -> dict[str, Any]:
     out = {**response, "results": kept}
     if len(kept) < len(entries):
         out["omitted"] = len(entries) - len(kept)
-    limit = budget // max(sum(id(e) in full for e in kept), 1)
+    limit = max(budget // max(sum(id(e) in full for e in kept), 1), 0)
     while True:
         _recut(kept, full, limit)
-        if limit == 0 or _size(out) <= MAX_RESPONSE_BYTES:
+        if limit <= 0 or _size(out) <= MAX_RESPONSE_BYTES:
             return out
         limit //= 2
 
