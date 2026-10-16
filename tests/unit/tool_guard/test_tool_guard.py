@@ -281,11 +281,12 @@ def test_marker_names_its_verdict_and_header(mod, tr, verdict, name, header):
 
     wrapped = tr.wrap("hello", digest, getattr(tr, verdict))
 
-    assert wrapped == (
+    expected = (
         f'<untrusted-tool-output id="{marker}" verdict="{name}">\n'
         f"{header}\nhello\n"
         f'</untrusted-tool-output id="{marker}">'
     )
+    assert wrapped == expected
 
 
 @pytest.mark.parametrize(
