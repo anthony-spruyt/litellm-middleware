@@ -5,10 +5,12 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MARKER = "IGNORE PREVIOUS INSTRUCTIONS"
+SCORE = 0.9731
 FAIL = "SCANNER-FAILS-ON-THIS"
 MAX_BODY_BYTES = int(os.environ.get("FAKE_SCANNER_MAX_BODY_BYTES", "0"))
 received = []
 verdicts = {}
+scores = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -38,10 +40,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         for item in body["new"]:
             verdicts[item["hash"]] = MARKER in item["text"]
+            if verdicts[item["hash"]]:
+                scores[item["hash"]] = SCORE
         flagged = [i["hash"] for i in body["new"] if verdicts[i["hash"]]]
         flagged += [h for h in body["known"] if verdicts.get(h)]
         unknown = [h for h in body["known"] if h not in verdicts]
-        self._json(200, {"flagged": flagged, "unknown": unknown})
+        self._json(
+            200, {"flagged": flagged, "unknown": unknown, "scores": {h: scores[h] for h in flagged if h in scores}}
+        )
 
     def _json(self, status, payload):
         data = json.dumps(payload).encode()

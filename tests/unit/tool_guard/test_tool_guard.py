@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import enum
 import hashlib
 import importlib
 import json
@@ -39,13 +40,44 @@ def fake_litellm(monkeypatch):
     monkeypatch.setitem(sys.modules, "litellm._logging", logging)
     monkeypatch.setitem(sys.modules, "litellm.integrations", types.ModuleType("litellm.integrations"))
     monkeypatch.setitem(sys.modules, "litellm.integrations.custom_logger", custom_logger)
+    monkeypatch.setitem(sys.modules, "litellm.integrations.custom_guardrail", _fake_custom_guardrail())
+    monkeypatch.setitem(sys.modules, "litellm.types", types.ModuleType("litellm.types"))
+    monkeypatch.setitem(sys.modules, "litellm.types.guardrails", _fake_guardrail_types())
     return logging
+
+
+def _fake_custom_guardrail():
+    module = types.ModuleType("litellm.integrations.custom_guardrail")
+    module.records = []
+
+    class CustomGuardrail:
+        def __init__(self, guardrail_name=None, **kwargs):
+            self.guardrail_name = guardrail_name
+            self.kwargs = kwargs
+
+        def add_standard_logging_guardrail_information_to_request_data(self, **kwargs):
+            module.records.append({"guardrail_name": self.guardrail_name, **kwargs})
+
+    module.CustomGuardrail = CustomGuardrail
+    return module
+
+
+def _fake_guardrail_types():
+    module = types.ModuleType("litellm.types.guardrails")
+    module.GuardrailEventHooks = enum.Enum("GuardrailEventHooks", {"pre_call": "pre_call"})
+    return module
+
+
+@pytest.fixture
+def records(fake_litellm):
+    return sys.modules["litellm.integrations.custom_guardrail"].records
 
 
 @pytest.fixture
 def mod():
     sys.modules.pop("litellm_middleware.tool_guard.tool_guard", None)
     sys.modules.pop("litellm_middleware.tool_guard.tool_results", None)
+    sys.modules.pop("litellm_middleware.tool_guard.record", None)
     sys.modules.pop("litellm_middleware.pipeline", None)
     return importlib.import_module("litellm_middleware.tool_guard.tool_guard")
 
@@ -58,8 +90,9 @@ def tr(mod):
 class Scanner:
     """Flags any text containing INJECTION and remembers verdicts, like the real scanner's cache."""
 
-    def __init__(self, status=200, body=None, delay=0.0, max_body=None):
+    def __init__(self, status=200, body=None, delay=0.0, max_body=None, score=0.97):
         self.requests = []
+        self.score = score
         self.status = status
         self.body = body
         self.delay = delay
@@ -82,7 +115,10 @@ class Scanner:
         flagged = [i["hash"] for i in payload["new"] if self.verdicts[i["hash"]]]
         flagged += [h for h in payload["known"] if self.verdicts.get(h)]
         unknown = [h for h in payload["known"] if h not in self.verdicts]
-        return httpx.Response(self.status, json={"flagged": flagged, "unknown": unknown})
+        body = {"flagged": flagged, "unknown": unknown}
+        if self.score is not None:
+            body["scores"] = dict.fromkeys(flagged, self.score)
+        return httpx.Response(self.status, json=body)
 
 
 def _guard(mod, scanner, **kwargs):
@@ -1416,3 +1452,601 @@ def test_from_env_bad_max_batch_bytes_uses_default(mod, monkeypatch, fake_litell
 
     assert mod.tool_guard_from_env().max_batch_bytes == mod.DEFAULT_MAX_BATCH_BYTES
     assert fake_litellm.verbose_proxy_logger.warnings
+
+
+def _tool_guard_records(records):
+    return [r for r in records if r["guardrail_name"] == "tool-guard"]
+
+
+def _only_record(records):
+    [record] = _tool_guard_records(records)
+    return record
+
+
+async def test_flagged_new_result_is_recorded_with_score_text_and_tool(mod, records):
+    data = _anthropic()
+
+    await _run(_guard(mod, Scanner(score=0.9731)), data)
+
+    record = _only_record(records)
+    text = INJECTION + "\n tail"
+    assert record["guardrail_status"] == "guardrail_flagged"
+    assert record["guardrail_provider"] == "llm-tool-guard"
+    assert record["event_type"].value == "pre_call"
+    assert record["request_data"] is data
+    assert record["tracing_detail"] == {"confidence_score": 0.9731}
+    assert record["end_time"] >= record["start_time"]
+    assert record["duration"] == pytest.approx(record["end_time"] - record["start_time"])
+    assert record["guardrail_json_response"] == {
+        "summary": "1 suspected injection (Read, 0.97)",
+        "results": [
+            {
+                "tool_name": "Read",
+                "tool_call_id": "toolu_02",
+                "verdict": "suspected-prompt-injection",
+                "score": 0.9731,
+                "text": text,
+            }
+        ],
+    }
+
+
+async def test_clean_new_result_is_recorded_as_success(mod, records):
+    await _run(_guard(mod, Scanner()), _anthropic(new="fine"))
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "success"
+    assert record["tracing_detail"] is None
+    assert record["guardrail_json_response"] == {
+        "summary": "no suspected injection in 1 new tool result",
+        "results": [],
+    }
+
+
+async def test_every_new_result_counts_in_the_clean_summary(mod, records):
+    data = _chat_history([], ["a", "b"])
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    assert _only_record(records)["guardrail_json_response"]["summary"] == "no suspected injection in 2 new tool results"
+
+
+async def test_nothing_is_recorded_when_every_result_is_carried_over(mod, records):
+    data = _anthropic(old="fine")
+    data["messages"] += [{"role": "assistant", "content": "ok"}, {"role": "user", "content": "more"}]
+    scanner = Scanner()
+    scanner.verdicts[_sha("file1\nfile2")] = False
+
+    await _run(_guard(mod, scanner), data)
+
+    assert _tool_guard_records(records) == []
+
+
+async def test_nothing_is_recorded_without_tool_results(mod, records):
+    data = {"litellm_call_id": "call-1", "messages": [{"role": "user", "content": "hi"}]}
+
+    await _run(_guard(mod, Scanner()), data)
+
+    assert _tool_guard_records(records) == []
+
+
+async def test_carried_over_flag_is_wrapped_but_not_recorded(mod, tr, records):
+    scanner = Scanner()
+    scanner.verdicts[_sha(INJECTION)] = True
+    data = _anthropic(old=INJECTION, new="fine")
+
+    out = await _run(_guard(mod, scanner), data)
+
+    assert out["messages"][2]["content"][0]["content"] == tr.wrap(INJECTION, _sha(INJECTION), tr.FLAGGED)
+    record = _only_record(records)
+    assert record["guardrail_status"] == "success"
+    assert record["guardrail_json_response"]["results"] == []
+
+
+async def test_a_new_result_repeating_an_old_one_is_still_recorded(mod, records):
+    scanner = Scanner()
+    data = _anthropic(old=INJECTION, new=INJECTION)
+    data["messages"][4]["content"][0]["content"] = INJECTION
+
+    await _run(_guard(mod, scanner), data)
+
+    [entry] = _only_record(records)["guardrail_json_response"]["results"]
+    assert entry["tool_call_id"] == "toolu_02"
+
+
+async def test_identical_new_results_are_listed_once(mod, records):
+    data = _chat_history([], [INJECTION, INJECTION])
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    record = _only_record(records)
+    assert [e["tool_call_id"] for e in record["guardrail_json_response"]["results"]] == ["n0"]
+    assert record["guardrail_json_response"]["summary"] == "1 suspected injection (Read, 0.97)"
+
+
+async def test_flag_without_score_is_a_scanner_error(mod, records):
+    await _run(_guard(mod, Scanner(score=None)), _anthropic())
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_failed_to_respond"
+    assert record["tracing_detail"] is None
+    assert record["guardrail_json_response"]["results"] == [
+        {"tool_name": "Read", "tool_call_id": "toolu_02", "verdict": "scanner-error", "score": None, "text": None}
+    ]
+    assert record["guardrail_json_response"]["summary"] == "1 scanner error"
+
+
+@pytest.mark.parametrize(
+    "scores",
+    ['"nope"', "[]", '{"sha256:other": 0.5}', '{"HASH": "high"}', '{"HASH": true}', '{"HASH": NaN}'],
+)
+async def test_unusable_scores_leave_the_flag_unscored(mod, records, scores):
+    digest = _sha(INJECTION + "\n tail")
+    body = f'{{"flagged": ["{digest}"], "scores": {scores.replace("HASH", digest)}}}'
+
+    await _run(_guard(mod, Scanner(body=body.encode())), _anthropic())
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_failed_to_respond"
+    assert record["guardrail_json_response"]["results"][0]["verdict"] == "scanner-error"
+
+
+async def test_scanner_without_scores_still_wraps_and_records(mod, tr, records):
+    body = json.dumps({"flagged": [_sha(INJECTION + "\n tail")], "unknown": []}).encode()
+
+    out = await _run(_guard(mod, Scanner(body=body)), _anthropic())
+
+    assert out["messages"][4]["content"][0]["content"][0]["text"].startswith("<untrusted-tool-output")
+    assert _only_record(records)["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+async def test_unchecked_new_result_is_a_failure_to_respond(mod, records):
+    await _run(_guard(mod, Scanner(status=503)), _anthropic())
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_failed_to_respond"
+    assert record["guardrail_json_response"]["results"] == [
+        {"tool_name": "Read", "tool_call_id": "toolu_02", "verdict": "unchecked", "score": None, "text": None}
+    ]
+    assert record["guardrail_json_response"]["summary"] == "1 unchecked"
+
+
+async def test_unchecked_carried_over_results_are_not_recorded(mod, records):
+    data = _anthropic(old="fine", new="fine")
+
+    await _run(_guard(mod, Scanner(status=503)), data)
+
+    [entry] = _only_record(records)["guardrail_json_response"]["results"]
+    assert entry["tool_call_id"] == "toolu_02"
+
+
+async def test_too_big_new_result_is_a_failure_to_respond(mod, records):
+    await _run(_guard(mod, Scanner(), max_text_bytes=10), _chat_history([], ["x" * 11]), "acompletion")
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_failed_to_respond"
+    assert record["guardrail_json_response"]["results"] == [
+        {"tool_name": "Read", "tool_call_id": "n0", "verdict": "too-big", "score": None, "text": None}
+    ]
+    assert record["guardrail_json_response"]["summary"] == "1 too big"
+
+
+async def test_a_model_flag_outranks_failures_and_every_deciding_result_is_listed(mod, records):
+    scanner = Scanner()
+    data = _chat_history([], [INJECTION, "x" * 100, "fine"])
+
+    await _run(_guard(mod, scanner, max_text_bytes=50), data, "acompletion")
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_flagged"
+    assert [(e["tool_call_id"], e["verdict"]) for e in record["guardrail_json_response"]["results"]] == [
+        ("n0", "suspected-prompt-injection"),
+        ("n1", "too-big"),
+    ]
+    assert record["guardrail_json_response"]["summary"] == "1 suspected injection (Read, 0.97), 1 too big"
+
+
+async def test_confidence_score_is_the_highest_new_model_score(mod, records):
+    scanner = Scanner()
+    data = _chat_history([], [INJECTION + "a", INJECTION + "b"])
+
+    class Scores(Scanner):
+        async def handle(self, request):
+            response = await super().handle(request)
+            body = json.loads(response.content)
+            body["scores"] = {h: 0.5 + i / 10 for i, h in enumerate(body["flagged"])}
+            return httpx.Response(200, json=body)
+
+    scanner = Scores()
+    await _run(_guard(mod, scanner), data, "acompletion")
+
+    record = _only_record(records)
+    assert record["tracing_detail"] == {"confidence_score": 0.6}
+    assert record["guardrail_json_response"]["summary"] == "2 suspected injections (max 0.60)"
+
+
+async def test_unwrappable_new_results_still_set_the_status(mod, records):
+    hit = {"type": "web_search_result", "url": "u", "title": INJECTION, "encrypted_content": "abc", "page_age": None}
+    data = _server_turn({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": [hit]})
+
+    await _run(_guard(mod, Scanner()), data)
+
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_flagged"
+    assert [e["tool_call_id"] for e in record["guardrail_json_response"]["results"]] == ["srvtoolu_01"]
+
+
+async def test_long_flagged_text_is_cut_to_its_head_and_tail(mod, records):
+    text = INJECTION + "H" * 40000 + "é" * 20000 + "T" * 100
+    data = _chat_history([], [text])
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    kept = _only_record(records)["guardrail_json_response"]["results"][0]["text"]
+    size = len(text.encode())
+    cut = int(re.search(r"\.\.\.\[(\d+) bytes cut\]\.\.\.", kept).group(1))
+    head, tail = kept.split(f"...[{cut} bytes cut]...")
+    assert len(kept.encode()) <= 32 * 1024
+    assert len(head.encode()) + cut + len(tail.encode()) == size
+    assert text.startswith(head)
+    assert text.endswith(tail)
+    assert head.startswith(INJECTION)
+    assert tail.endswith("T" * 100)
+
+
+async def test_text_within_the_cap_is_kept_whole(mod, records):
+    text = INJECTION + "x" * (32 * 1024 - len(INJECTION))
+    data = _chat_history([], [text])
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    assert _only_record(records)["guardrail_json_response"]["results"][0]["text"] == text
+
+
+async def test_the_whole_record_stays_within_64_kib(mod, records):
+    texts = [f"{INJECTION} {i} " + "x" * 30000 for i in range(8)]
+    data = _chat_history([], texts)
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    response = _only_record(records)["guardrail_json_response"]
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
+    assert [e["tool_call_id"] for e in response["results"]] == [f"n{i}" for i in range(8)]
+    assert all(e["text"].startswith(f"{INJECTION} {i} ") for i, e in enumerate(response["results"]))
+
+
+async def test_a_flood_of_results_is_listed_up_to_the_cap(mod, records):
+    data = _chat_history([], [f"{INJECTION} {i}" for i in range(2000)])
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    response = _only_record(records)["guardrail_json_response"]
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
+    kept = len(response["results"])
+    assert kept > 0
+    assert response["omitted"] == 2000 - kept
+
+
+async def test_recording_failure_never_breaks_the_request(mod, fake_litellm, monkeypatch):
+    guardrail = sys.modules["litellm.integrations.custom_guardrail"]
+
+    def boom(self, **_):
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr(guardrail.CustomGuardrail, "add_standard_logging_guardrail_information_to_request_data", boom)
+
+    out = await _run(_guard(mod, Scanner()), _anthropic())
+
+    assert out["messages"][4]["content"][0]["content"][0]["text"].startswith("<untrusted-tool-output")
+    warnings = fake_litellm.verbose_proxy_logger.warnings
+    assert any("RuntimeError" in str(args) and "secret detail" not in str(args) for args, _ in warnings)
+
+
+async def test_missing_guardrail_support_never_breaks_the_request(mod, fake_litellm, monkeypatch):
+    monkeypatch.setitem(sys.modules, "litellm.integrations.custom_guardrail", None)
+
+    out = await _run(_guard(mod, Scanner()), _anthropic())
+
+    assert out["messages"][4]["content"][0]["content"][0]["text"].startswith("<untrusted-tool-output")
+    assert fake_litellm.verbose_proxy_logger.warnings
+
+
+async def test_a_guardrail_is_built_once(mod, records, monkeypatch):
+    built = []
+    guardrail = sys.modules["litellm.integrations.custom_guardrail"]
+    original = guardrail.CustomGuardrail.__init__
+
+    def counting(self, **kwargs):
+        built.append(kwargs)
+        original(self, **kwargs)
+
+    monkeypatch.setattr(guardrail.CustomGuardrail, "__init__", counting)
+
+    await _run(_guard(mod, Scanner()), _anthropic())
+    await _run(_guard(mod, Scanner()), _anthropic())
+
+    assert built == [{"guardrail_name": "tool-guard"}]
+    assert len(_tool_guard_records(records)) == 2
+
+
+async def test_other_callers_and_unsupported_calls_are_not_recorded(mod, records):
+    other = SimpleNamespace(key_alias="other", team_id=None)
+
+    await _run(_guard(mod, Scanner()), _anthropic(), user=other)
+    rejected = await _run(_guard(mod, Scanner()), _websocket_frame(), "_aresponses_websocket")
+    await _run(mod.ToolGuardMiddleware(None, key_aliases={"guarded"}), _anthropic())
+
+    assert isinstance(rejected, Exception)
+    assert records == []
+
+
+def _identity(tr, items, fmt, index=-1):
+    results = tr.find(items, fmt)
+    return tr.identify(items, fmt, results[index])
+
+
+def test_anthropic_tool_names_come_from_the_matching_tool_use(mod, tr):
+    items = _anthropic()["messages"]
+
+    assert _identity(tr, items, "anthropic", 0) == ("Bash", "toolu_01")
+    assert _identity(tr, items, "anthropic", 1) == ("Read", "toolu_02")
+
+
+@pytest.mark.parametrize("kind", ["tool_use", "server_tool_use", "mcp_tool_use"])
+def test_anthropic_names_cover_every_tool_use_kind(mod, tr, kind):
+    items = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": [{"type": kind, "id": "t1", "name": "lookup", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r"}]},
+    ]
+
+    assert _identity(tr, items, "anthropic") == ("lookup", "t1")
+
+
+def test_anthropic_server_tool_result_names_its_server_tool_use(mod, tr):
+    items = _server_turn(_web_fetch("page"))["messages"]
+
+    assert _identity(tr, items, "anthropic") == ("web_fetch", "srvtoolu_01")
+
+
+def test_anthropic_unknown_tool_has_no_name(mod, tr):
+    items = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t9", "content": "r"}]},
+    ]
+
+    assert _identity(tr, items, "anthropic") == (None, "t9")
+
+
+def test_anthropic_result_without_an_id_has_neither(mod, tr):
+    items = [
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": [{"type": "tool_result", "content": "r"}]},
+    ]
+
+    assert _identity(tr, items, "anthropic") == (None, None)
+
+
+def test_chat_tool_names_come_from_the_matching_tool_call(mod, tr):
+    items = _chat()["messages"]
+
+    assert _identity(tr, items, "chat", 0) == ("Bash", "call_01")
+    assert _identity(tr, items, "chat", 1) == ("Read", "call_02")
+
+
+def test_legacy_function_messages_carry_their_own_name(mod, tr):
+    items = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": None, "function_call": {"name": "lookup", "arguments": "{}"}},
+        {"role": "function", "name": "lookup", "content": "r"},
+    ]
+
+    assert _identity(tr, items, "chat") == ("lookup", None)
+
+
+def test_chat_tool_message_name_is_the_fallback(mod, tr):
+    items = [
+        {"role": "assistant", "content": "hi"},
+        {"role": "tool", "tool_call_id": "c1", "name": "named", "content": "r"},
+    ]
+
+    assert _identity(tr, items, "chat") == ("named", "c1")
+
+
+@pytest.mark.parametrize("kind", ["function_call", "custom_tool_call"])
+def test_responses_names_come_from_the_call_with_the_same_call_id(mod, tr, kind):
+    items = [
+        {"role": "user", "content": "go"},
+        {"type": kind, "call_id": "fc", "name": "lookup"},
+        {"type": f"{kind}_output", "call_id": "fc", "output": "r"},
+    ]
+
+    assert _identity(tr, items, "responses") == ("lookup", "fc")
+
+
+def test_responses_mcp_call_is_its_own_call(mod, tr):
+    items = _mcp_call()["input"]
+
+    assert _identity(tr, items, "responses") == ("read", "mcp_01")
+
+
+def test_responses_output_without_a_known_call_has_only_its_id(mod, tr):
+    items = [
+        {"role": "assistant", "content": "x"},
+        {"type": "shell_call_output", "call_id": "sh1", "output": "r"},
+    ]
+
+    assert _identity(tr, items, "responses") == (None, "sh1")
+
+
+def test_gemini_names_come_from_the_function_response(mod, tr):
+    items = [
+        {"role": "user", "parts": [{"text": "read"}]},
+        {"role": "model", "parts": [{"functionCall": {"name": "read", "args": {}}}]},
+        {"role": "user", "parts": [{"functionResponse": {"id": "g1", "name": "read", "response": {"out": "r"}}}]},
+    ]
+
+    assert _identity(tr, items, "gemini") == ("read", "g1")
+
+
+def test_gemini_snake_case_response_without_an_id(mod, tr):
+    items = [
+        {"role": "model", "parts": [{"functionCall": {"name": "read", "args": {}}}]},
+        {"role": "user", "parts": [{"function_response": {"name": "read", "response": {"out": "r"}}}]},
+    ]
+
+    assert _identity(tr, items, "gemini") == ("read", None)
+
+
+@pytest.mark.parametrize("bad", [None, 7, ["x"], {"a": 1}])
+def test_non_string_names_and_ids_are_ignored(mod, tr, bad):
+    items = [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": bad, "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": bad, "content": "r"}]},
+    ]
+
+    assert _identity(tr, items, "anthropic") == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "data", "expected"),
+    [
+        ("anthropic_messages", _anthropic(), ("Read", "toolu_02")),
+        ("acompletion", _chat(), ("Read", "call_02")),
+        ("aresponses", _responses(), ("Read", "fc_02")),
+    ],
+)
+async def test_each_format_records_its_tool(mod, records, call_type, data, expected):
+    await _run(_guard(mod, Scanner()), data, call_type)
+
+    [entry] = _only_record(records)["guardrail_json_response"]["results"]
+    actual = (entry["tool_name"], entry["tool_call_id"])
+    assert actual == expected
+
+
+@pytest.fixture
+def placeholder(fake_litellm):
+    sys.modules.pop("litellm_middleware.tool_guard.placeholder", None)
+    return importlib.import_module("litellm_middleware.tool_guard.placeholder")
+
+
+def test_placeholder_is_built_by_litellm_from_the_guardrail_entry(placeholder):
+    guardrail = placeholder.ToolGuardPlaceholder(guardrail_name="tool-guard", event_hook="pre_call", default_on=False)
+
+    custom_guardrail = sys.modules["litellm.integrations.custom_guardrail"]
+    assert isinstance(guardrail, custom_guardrail.CustomGuardrail)
+    assert guardrail.guardrail_name == "tool-guard"
+
+
+def test_placeholder_defines_no_hooks_of_its_own(placeholder):
+    hooks = [name for name, value in vars(placeholder.ToolGuardPlaceholder).items() if callable(value)]
+
+    assert hooks == []
+
+
+def test_placeholder_writes_no_record(placeholder, records):
+    placeholder.ToolGuardPlaceholder(guardrail_name="tool-guard", event_hook="pre_call", default_on=False)
+
+    assert records == []
+
+
+def _chat_call(call_id, name, text):
+    call = {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+    return {
+        "litellm_call_id": "call-1",
+        "messages": [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": None, "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": call_id, "content": text},
+        ],
+    }
+
+
+@pytest.mark.parametrize("field", ["tool_name", "tool_call_id"])
+async def test_a_huge_tool_name_or_call_id_is_capped_and_the_record_fits(mod, records, field):
+    huge = "n" * (70 * 1024)
+    name, call_id = (huge, "c1") if field == "tool_name" else ("Read", huge)
+
+    await _run(_guard(mod, Scanner()), _chat_call(call_id, name, INJECTION), "acompletion")
+
+    response = _only_record(records)["guardrail_json_response"]
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
+    [entry] = response["results"]
+    assert len(entry[field].encode()) <= 256
+    assert entry["verdict"] == "suspected-prompt-injection"
+    assert len(response["summary"].encode()) < 1024
+
+
+async def test_many_huge_names_still_fit_the_record(mod, records):
+    huge = "n" * (70 * 1024)
+    calls = [{"id": f"c{i}", "type": "function", "function": {"name": huge, "arguments": "{}"}} for i in range(300)]
+    messages = [{"role": "user", "content": "go"}, {"role": "assistant", "content": None, "tool_calls": calls}]
+    messages += [{"role": "tool", "tool_call_id": f"c{i}", "content": f"{INJECTION} {i}"} for i in range(300)]
+
+    await _run(_guard(mod, Scanner()), {"litellm_call_id": "call-1", "messages": messages}, "acompletion")
+
+    response = _only_record(records)["guardrail_json_response"]
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= 64 * 1024
+
+
+async def test_a_lone_surrogate_in_a_name_or_call_id_is_recorded(mod, records):
+    data = _chat_call("c\ud800", "Re\udc00ad", INJECTION)
+
+    await _run(_guard(mod, Scanner()), data, "acompletion")
+
+    [entry] = _only_record(records)["guardrail_json_response"]["results"]
+    entry["tool_name"].encode("utf-8")
+    entry["tool_call_id"].encode("utf-8")
+
+
+def test_record_size_counts_a_lone_surrogate(mod):
+    record = importlib.import_module("litellm_middleware.tool_guard.record")
+
+    assert record._size({"a": "\ud800"}) == len('{"a": "') + 3 + len('"}')
+
+
+def _counting_block(counter, **fields):
+    class Block(dict):
+        def get(self, *args):
+            counter.append(args)
+            return super().get(*args)
+
+    return Block(**fields)
+
+
+def test_tool_names_are_looked_up_without_rescanning_the_request_per_result(mod, tr):
+    record = importlib.import_module("litellm_middleware.tool_guard.record")
+    count = 300
+    gets = []
+    uses = [_counting_block(gets, type="tool_use", id=f"u{i}", name="Read", input={}) for i in range(count)]
+    results = [{"type": "tool_result", "tool_use_id": f"r{i}", "content": f"{INJECTION} {i}"} for i in range(count)]
+    items = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": uses},
+        {"role": "user", "content": results},
+    ]
+    found = tr.find(items, "anthropic")
+    verdicts = {r.hash: tr.FLAGGED for r in found}
+    gets.clear()
+
+    made = record.build(items, "anthropic", found, verdicts, dict.fromkeys(verdicts, 0.9))
+
+    assert len(made.response["results"]) == count
+    assert len(gets) <= 10 * count
+
+
+async def test_a_huge_score_is_dropped_without_affecting_other_flags(mod, records):
+    first, second = _sha(INJECTION + " a"), _sha(INJECTION + " b")
+    body = f'{{"flagged": ["{first}", "{second}"], "scores": {{"{first}": {"9" * 400}, "{second}": 0.8}}}}'
+    data = _chat_history([], [INJECTION + " a", INJECTION + " b"])
+
+    out = await _run(_guard(mod, Scanner(body=body.encode())), data, "acompletion")
+
+    assert all(m["content"].startswith("<untrusted-tool-output") for m in out["messages"][-2:])
+    record = _only_record(records)
+    assert record["guardrail_status"] == "guardrail_flagged"
+    assert {e["tool_call_id"]: (e["verdict"], e["score"]) for e in record["guardrail_json_response"]["results"]} == {
+        "n0": ("scanner-error", None),
+        "n1": ("suspected-prompt-injection", 0.8),
+    }

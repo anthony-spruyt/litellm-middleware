@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 RATELIMIT_HEADERS = {
@@ -22,8 +23,9 @@ def _last_user_text(body):
 
 
 def _message(model, text):
+    # LiteLLM keys spend logs by the response id, so each response needs its own.
     return {
-        "id": "msg_it",
+        "id": f"msg_it_{uuid.uuid4().hex}",
         "type": "message",
         "role": "assistant",
         "model": model,
