@@ -2006,18 +2006,20 @@ def test_record_size_counts_a_lone_surrogate(mod):
     assert record._size({"a": "\ud800"}) == len('{"a": "') + 3 + len('"}')
 
 
-class _CountingBlock(dict):
-    gets = 0
+def _counting_block(counter, **fields):
+    class Block(dict):
+        def get(self, *args):
+            counter.append(args)
+            return super().get(*args)
 
-    def get(self, *args):
-        type(self).gets += 1
-        return super().get(*args)
+    return Block(**fields)
 
 
 def test_tool_names_are_looked_up_without_rescanning_the_request_per_result(mod, tr):
     record = importlib.import_module("litellm_middleware.tool_guard.record")
     count = 300
-    uses = [_CountingBlock(type="tool_use", id=f"u{i}", name="Read", input={}) for i in range(count)]
+    gets = []
+    uses = [_counting_block(gets, type="tool_use", id=f"u{i}", name="Read", input={}) for i in range(count)]
     results = [{"type": "tool_result", "tool_use_id": f"r{i}", "content": f"{INJECTION} {i}"} for i in range(count)]
     items = [
         {"role": "user", "content": "go"},
@@ -2026,12 +2028,12 @@ def test_tool_names_are_looked_up_without_rescanning_the_request_per_result(mod,
     ]
     found = tr.find(items, "anthropic")
     verdicts = {r.hash: tr.FLAGGED for r in found}
-    _CountingBlock.gets = 0
+    gets.clear()
 
     made = record.build(items, "anthropic", found, verdicts, dict.fromkeys(verdicts, 0.9))
 
     assert len(made.response["results"]) == count
-    assert _CountingBlock.gets <= 10 * count
+    assert len(gets) <= 10 * count
 
 
 async def test_a_huge_score_is_dropped_without_affecting_other_flags(mod, records):
