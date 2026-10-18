@@ -1,3 +1,9 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Manager level: a packageRule cannot enable lock file maintenance.
+  "pep621": {
+    "lockFileMaintenance": {
+      "enabled": true
+    }
+  }
 }
