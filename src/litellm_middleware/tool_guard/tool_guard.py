@@ -284,7 +284,7 @@ def _score(value: Any) -> float | None:
 
 
 def _flag_what_cannot_be_removed(verdicts: dict[str, str], results: list[ToolResult]) -> None:
-    """A hash is blocked only when every result holding its text can be emptied; otherwise it is flagged and wrapped."""
+    """A hash is blocked only when every result holding its text can be emptied; otherwise it is flagged instead."""
     for result in results:
         if verdicts.get(result.hash) == BLOCKED and not result.removable:
             verdicts[result.hash] = FLAGGED

@@ -1,4 +1,4 @@
-"""Blocked results lose all their text to a removed notice; formats that can't be emptied are not removable."""
+"""Blocked results lose all their text to a removed notice; one whose text cannot all be replaced is not removable."""
 
 import copy
 import hashlib
@@ -245,12 +245,12 @@ def _gemini(response):
         "string",
         "text-and-image",
         "document",
-        "web-search-titles",
-        "text-beside-titles",
-        "gemini-object",
-        "gemini-nested-object",
-        "gemini-string",
-        "gemini-list",
+        "not-fully-removable",
+        "partly-removable",
+        "structured-response",
+        "nested-structured-response",
+        "string-response",
+        "list-response",
     ],
 )
 def test_a_result_is_removable_only_when_every_text_slot_can_be_replaced(items, fmt, removable):
@@ -259,7 +259,7 @@ def test_a_result_is_removable_only_when_every_text_slot_can_be_replaced(items, 
     assert result.removable is removable
 
 
-def test_a_result_made_only_of_titles_has_nothing_to_replace():
+def test_a_result_whose_text_cannot_all_be_replaced_is_not_removable():
     [result] = tr.find(_anthropic([_hit()]), "anthropic")
 
     assert result.wrappable is False

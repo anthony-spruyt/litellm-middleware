@@ -2533,7 +2533,7 @@ async def test_a_blocked_server_tool_result_loses_its_text(mod):
     assert source == {"type": "text", "media_type": "text/plain", "data": REMOVED}
 
 
-async def test_titles_that_cannot_be_wrapped_are_flagged_instead_of_blocked(mod, records):
+async def test_a_blocked_result_that_cannot_be_fully_removed_is_recorded_flagged(mod, records):
     data = _server_turn({"type": "web_search_tool_result", "tool_use_id": "s1", "content": [_search_hit(BLOCK_TEXT)]})
     original = copy.deepcopy(data)
 
@@ -2547,7 +2547,7 @@ async def test_titles_that_cannot_be_wrapped_are_flagged_instead_of_blocked(mod,
     assert _response(records)["counts"] == _counts(flagged=1)
 
 
-async def test_text_beside_titles_is_wrapped_instead_of_removed(mod, tr, records):
+async def test_a_partly_removable_blocked_result_is_wrapped_as_flagged_instead_of_removed(mod, tr, records):
     data = _anthropic(new=BLOCK_TEXT)
     data["messages"][4]["content"][0]["content"] = [{"type": "text", "text": BLOCK_TEXT}, _search_hit("title")]
 
@@ -2559,7 +2559,7 @@ async def test_text_beside_titles_is_wrapped_instead_of_removed(mod, tr, records
     assert [r["action_taken"] for r in _rows(records)] == ["FLAG"]
 
 
-async def test_a_gemini_response_object_is_wrapped_instead_of_removed(mod, tr, records):
+async def test_a_blocked_result_whose_text_cannot_all_be_replaced_is_recorded_flagged_and_wrapped(mod, tr, records):
     data = _gemini_data({"output": BLOCK_TEXT})
 
     out = await _run(_guard(mod, JevScanner()), data, "agenerate_content")
