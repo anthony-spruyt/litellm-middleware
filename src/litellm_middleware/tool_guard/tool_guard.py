@@ -234,15 +234,25 @@ def _answer(body: Any, sent: set[str]) -> _Answer:
     jev = _scores(body.get("jev_scores"), [*blocked, *cleared])
     scored = {h for h in sent if h in scores and h in jev}
     verdicts = dict.fromkeys(flagged, FLAGGED)
-    flagged_set = set(flagged)
+    _block(verdicts, blocked, sent, scored)
+    _clear(verdicts, cleared, unknown, sent, scored)
+    return _Answer(verdicts, unknown, scores, jev)
+
+
+def _block(verdicts: dict[str, str], blocked: list[str], sent: set[str], scored: set[str]) -> None:
+    """Blocks the flagged hashes with both scores; any other blocked hash that was sent stays flagged."""
+    confirmed = verdicts.keys() & scored
     for digest in blocked:
         if digest in sent:
-            verdicts[digest] = BLOCKED if digest in flagged_set and digest in scored else FLAGGED
+            verdicts[digest] = BLOCKED if digest in confirmed else FLAGGED
+
+
+def _clear(verdicts: dict[str, str], cleared: list[str], unknown: list[str], sent: set[str], scored: set[str]) -> None:
+    """Clears sent hashes with both scores that no other list answered; one without both scores is flagged."""
     unanswered = set(unknown)
     for digest in cleared:
         if digest in sent and digest not in verdicts and digest not in unanswered:
             verdicts[digest] = CLEARED if digest in scored else FLAGGED
-    return _Answer(verdicts, unknown, scores, jev)
 
 
 def _hashes(value: Any, name: str) -> list[str]:
