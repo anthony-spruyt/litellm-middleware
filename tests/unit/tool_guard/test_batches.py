@@ -14,7 +14,7 @@ def _bodies(new, known, limit):
 
 
 def _httpx_body(new, known):
-    payload = {"new": [{"hash": h, "text": t} for h, t in new], "known": known}
+    payload = {"new": [{"hash": h, "text": t} for h, t in new], "known": known, "jev": True}
     return httpx.Request("POST", "http://scanner.test", json=payload).content
 
 
@@ -30,6 +30,13 @@ def test_everything_that_fits_goes_in_one_batch_encoded_like_the_http_client():
 
     assert batch.body == _httpx_body(new, known)
     assert batch.hashes == [_id("a"), _id("b"), _id("c"), _id("d")]
+
+
+def test_every_body_opts_in_to_the_second_check():
+    out = list(batches([(_id("a"), "x" * 40)], [_id("k")], 1_000_000))
+
+    assert json.loads(out[0].body)["jev"] is True
+    assert out[0].body.endswith(b',"jev":true}')
 
 
 def test_nothing_to_send_makes_no_batch():
@@ -97,7 +104,7 @@ def test_known_hashes_follow_new_items_and_fill_the_same_batch():
 
     [batch] = list(batches(new, known, _sizes(new, known)))
 
-    assert json.loads(batch.body) == {"new": [{"hash": _id("a"), "text": "x" * 40}], "known": known}
+    assert json.loads(batch.body) == {"new": [{"hash": _id("a"), "text": "x" * 40}], "known": known, "jev": True}
 
 
 def test_known_hashes_respect_the_limit():
@@ -119,7 +126,7 @@ def test_a_batch_with_new_items_spills_known_hashes_into_the_next_batch():
     out = list(batches(new, known, limit))
 
     assert [b.hashes for b in out] == [[_id("a"), _id("k1")], [_id("k2")]]
-    assert json.loads(out[1].body) == {"new": [], "known": [_id("k2")]}
+    assert json.loads(out[1].body) == {"new": [], "known": [_id("k2")], "jev": True}
 
 
 def test_batches_are_encoded_only_as_they_are_consumed():

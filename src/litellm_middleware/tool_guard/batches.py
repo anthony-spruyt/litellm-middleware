@@ -8,7 +8,9 @@ from dataclasses import dataclass, field
 
 # Same encoding httpx uses for json=..., so a body's length is the length on the wire.
 _JSON_OPTIONS = {"ensure_ascii": False, "separators": (",", ":"), "allow_nan": False}
-_EMPTY_BODY_BYTES = len(b'{"new":[],"known":[]}')
+# "jev" opts in to the scanner's blocked and cleared answers.
+_TAIL = b'],"jev":true}'
+_EMPTY_BODY_BYTES = len(b'{"new":[],"known":[' + _TAIL)
 
 
 @dataclass
@@ -20,7 +22,7 @@ class Batch:
 
     @property
     def body(self) -> bytes:
-        return b'{"new":[' + b",".join(self.new) + b'],"known":[' + b",".join(self.known) + b"]}"
+        return b'{"new":[' + b",".join(self.new) + b'],"known":[' + b",".join(self.known) + _TAIL
 
     def growth(self, fragment: bytes, is_new: bool) -> int:
         siblings = self.new if is_new else self.known

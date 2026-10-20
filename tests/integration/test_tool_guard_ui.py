@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 from conftest import GUARDED_ALIAS, MODEL
-from fake_scanner import MARKER, SCORE
+from fake_scanner import BLOCK_MARKER, BLOCK_SCORE, CLEAR_MARKER, CLEAR_SCORE, MARKER, SCORE
 
 WAIT_SECONDS = 60
 
@@ -129,6 +129,56 @@ def test_flagged_tool_result_is_recorded_in_spend_logs_and_the_guardrails_monito
         return [row for row in resp.json()["rows"] if row["name"] == "tool-guard" and row["requestsEvaluated"] >= 1]
 
     _eventually(monitor_overview, "Guardrails Monitor overview row")
+
+
+def _monitor_log(proxy, request_id: str) -> dict:
+    def fetch():
+        resp = proxy.client.get("/guardrails/usage/logs", params={"guardrail_id": "tool-guard"})
+        assert resp.status_code == 200, resp.text
+        return [log for log in resp.json()["logs"] if log["id"] == request_id]
+
+    [log] = _eventually(fetch, "Guardrails Monitor log row")
+    return log
+
+
+def test_blocked_tool_result_is_recorded_as_an_intervention(proxy, database_key):
+    nonce = uuid.uuid4().hex
+    command = f"cat notes-{nonce}.txt"
+    text = f"{MARKER} {BLOCK_MARKER}"
+    body = _body(nonce, [("Bash", "toolu_blocked", text), ("Read", "toolu_clean", "benign")], command)
+
+    request_id = _send(proxy, database_key, body)
+
+    entry = _tool_guard_entry(proxy, request_id)
+    assert entry["guardrail_status"] == "guardrail_intervened"
+    assert entry["guardrail_action"] == "BLOCKED"
+    assert entry["confidence_score"] == SCORE
+    assert entry["guardrail_response"]["counts"]["blocked"] == 1
+    assert entry["match_details"] == [
+        {
+            "type": "Bash",
+            "detection_method": "prompt-guard",
+            "action_taken": "BLOCK",
+            "category": f"{SCORE:.2f}, jev {BLOCK_SCORE:.2f}",
+            "snippet": f"{command} \u2192 {text} {nonce}",
+        }
+    ]
+    assert _monitor_log(proxy, request_id)["action"] == "blocked"
+
+
+def test_cleared_tool_result_is_recorded_as_a_flag_noting_the_second_check(proxy, database_key):
+    nonce = uuid.uuid4().hex
+    text = f"{MARKER} {CLEAR_MARKER}"
+
+    request_id = _send(proxy, database_key, _body(nonce, [("Bash", "toolu_cleared", text)]))
+
+    entry = _tool_guard_entry(proxy, request_id)
+    assert entry["guardrail_status"] == "guardrail_flagged"
+    assert entry["guardrail_action"] == "FLAGGED"
+    assert entry["guardrail_response"]["counts"]["jev-cleared"] == 1
+    [row] = entry["match_details"]
+    assert (row["action_taken"], row["category"]) == ("FLAG", f"{SCORE:.2f}, jev-cleared {CLEAR_SCORE:.2f}")
+    assert _monitor_log(proxy, request_id)["action"] == "flagged"
 
 
 def test_clean_tool_result_is_recorded_as_success(proxy, database_key):

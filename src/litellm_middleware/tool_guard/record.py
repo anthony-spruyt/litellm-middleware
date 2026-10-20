@@ -5,13 +5,15 @@ from __future__ import annotations
 import functools
 import json
 from dataclasses import dataclass
-from operator import attrgetter
 from typing import Any
 
 from .tool_results import (
+    BLOCKED,
+    CLEARED,
     FLAGGED,
     MAX_IDENTITY_BYTES,
     MAX_PART_BYTES,
+    STRICTNESS,
     TOO_BIG,
     UNCHECKED,
     Identify,
@@ -24,16 +26,21 @@ GUARDRAIL_NAME = "tool-guard"
 PROVIDER = "llm-tool-guard"
 DETECTION_METHOD = "prompt-guard"
 SCANNER_ERROR = "scanner-error"
+BLOCK = "BLOCK"
 FLAG = "FLAG"
 SKIP = "SKIP"
 GUARDRAIL_ACTION = "FLAGGED"
+BLOCKED_ACTION = "BLOCKED"
 UNNAMED_TOOL = "tool"
 ARROW = "\u2192"
 MAX_RESPONSE_BYTES = 64 * 1024
 _SLACK_BYTES = 256
 _FAILURES = (SCANNER_ERROR, UNCHECKED, TOO_BIG)
 _FAILURE_LABELS = {SCANNER_ERROR: "scanner error", UNCHECKED: "unchecked", TOO_BIG: "too big"}
-_VERDICTS = (FLAGGED, *_FAILURES)
+_SCORED = (BLOCKED, FLAGGED, CLEARED)
+_VERDICTS = (*_SCORED, *_FAILURES)
+_ROW_ACTIONS = {BLOCKED: BLOCK, FLAGGED: FLAG, CLEARED: FLAG}
+_SUMMARY_LABELS = {BLOCKED: "blocked", FLAGGED: "suspected injection", CLEARED: "jev-cleared"}
 
 
 @dataclass(frozen=True)
@@ -48,21 +55,25 @@ class _Entry:
     tool_name: str | None
     verdict: str
     score: float | None
+    jev: float | None
     tool_input: str | None
     text: str | None
 
 
-def build(
+def build(  # noqa: PLR0913 - one argument for each part of the scanner's answer
     items: list,
     call_type_format: str,
     results: list[ToolResult],
     verdicts: dict[str, str],
     scores: dict[str, float],
+    *,
+    jev: dict[str, float] | None = None,
 ) -> Record | None:
     """Returns the record for the request's new tool results, or None when it has none."""
     new = [r for r in results if r.new]
     if not new:
         return None
+    jev = jev or {}
     entries: list[_Entry] = []
     seen: set[str] = set()
     identify = identifier(items, call_type_format)
@@ -70,9 +81,11 @@ def build(
         if result.hash in seen or result.hash not in verdicts:
             continue
         seen.add(result.hash)
-        entries.append(_entry(identify, result, verdicts[result.hash], scores.get(result.hash)))
-    flagged = [e for e in entries if e.verdict == FLAGGED]
-    if flagged:
+        entries.append(_entry(identify, result, verdicts[result.hash], scores.get(result.hash), jev.get(result.hash)))
+    scored = [e for e in entries if e.verdict in _SCORED]
+    if any(e.verdict == BLOCKED for e in scored):
+        status = "guardrail_intervened"
+    elif scored:
         status = "guardrail_flagged"
     elif entries:
         status = "guardrail_failed_to_respond"
@@ -80,8 +93,8 @@ def build(
         status = "success"
     response = {"summary": _summary(entries, len(new)), "counts": {v: _count(entries, v) for v in _VERDICTS}}
     detail: dict[str, Any] = {"detection_method": DETECTION_METHOD}
-    if flagged:
-        detail.update(_flagged_detail(flagged))
+    if scored:
+        detail.update(_scored_detail(scored))
     return Record(status, *_fit(response, detail, entries))
 
 
@@ -108,27 +121,30 @@ def _guardrail() -> Any:
     return CustomGuardrail(guardrail_name=GUARDRAIL_NAME)
 
 
-def _entry(identify: Identify, result: ToolResult, verdict: str, score: float | None) -> _Entry:
-    if verdict == FLAGGED and score is None:
+def _entry(identify: Identify, result: ToolResult, verdict: str, score: float | None, jev: float | None) -> _Entry:
+    if verdict in (BLOCKED, CLEARED) and jev is None:
+        verdict = FLAGGED
+    if verdict in _SCORED and score is None:
         verdict = SCANNER_ERROR
     name, _, tool_input = identify(result)
     return _Entry(
         None if name is None else cut(name, MAX_IDENTITY_BYTES),
         verdict,
         score,
+        jev,
         tool_input,
-        result.text if verdict == FLAGGED else None,
+        result.text if verdict in _SCORED else None,
     )
 
 
 def _row(entry: _Entry) -> dict[str, str]:
-    """One Match Details row: the flagged ones show the tool input and its output, the others only the input."""
+    """One Match Details row: the scored ones show the tool input and its output, the others only the input."""
     tool_input = entry.tool_input or ""
     if entry.text is None:
         action, category, snippet = SKIP, entry.verdict, tool_input
     else:
         output = cut(entry.text, MAX_PART_BYTES)
-        action, category = FLAG, f"{entry.score:.2f}"
+        action, category = _ROW_ACTIONS[entry.verdict], _category(entry)
         snippet = f"{tool_input} {ARROW} {output}" if tool_input else output
     return {
         "type": entry.tool_name or UNNAMED_TOOL,
@@ -139,17 +155,31 @@ def _row(entry: _Entry) -> dict[str, str]:
     }
 
 
-def _flagged_detail(flagged: list[_Entry]) -> dict[str, Any]:
-    top = max(flagged, key=attrgetter("score"))
+def _category(entry: _Entry) -> str:
+    if entry.verdict == BLOCKED:
+        return f"{entry.score:.2f}, jev {entry.jev:.2f}"
+    if entry.verdict == CLEARED:
+        return f"{entry.score:.2f}, {CLEARED} {entry.jev:.2f}"
+    return f"{entry.score:.2f}"
+
+
+def _reason(entry: _Entry) -> str:
+    name = entry.tool_name or UNNAMED_TOOL
+    if entry.verdict == BLOCKED:
+        return f"{name} output removed, scored {entry.score:.2f} and jev {entry.jev:.2f}"
+    if entry.verdict == CLEARED:
+        return f"{name} output scored {entry.score:.2f}, jev cleared it at {entry.jev:.2f}"
+    return f"{name} output scored {entry.score:.2f}"
+
+
+def _scored_detail(scored: list[_Entry]) -> dict[str, Any]:
+    top = max(scored, key=lambda e: (STRICTNESS[e.verdict], e.score))
+    blocked = any(e.verdict == BLOCKED for e in scored)
     return {
         "confidence_score": top.score,
-        "classification": {
-            "category": FLAGGED,
-            "confidence": top.score,
-            "reason": f"{top.tool_name or UNNAMED_TOOL} output scored {top.score:.2f}",
-        },
+        "classification": {"category": FLAGGED, "confidence": top.score, "reason": _reason(top)},
         "violation_categories": [FLAGGED],
-        "guardrail_action": GUARDRAIL_ACTION,
+        "guardrail_action": BLOCKED_ACTION if blocked else GUARDRAIL_ACTION,
     }
 
 
@@ -161,9 +191,11 @@ def _summary(entries: list[_Entry], new_results: int) -> str:
     if not entries:
         return f"no suspected injection in {new_results} new tool result{'s' * (new_results != 1)}"
     parts = []
-    flagged = [e for e in entries if e.verdict == FLAGGED]
-    if flagged:
-        parts.append(f"{len(flagged)} suspected injection{'s' * (len(flagged) != 1)}{_detail(flagged)}")
+    for verdict in _SCORED:
+        scored = [e for e in entries if e.verdict == verdict]
+        if scored:
+            plural = "s" * (verdict == FLAGGED and len(scored) != 1)
+            parts.append(f"{len(scored)} {_SUMMARY_LABELS[verdict]}{plural}{_detail(scored)}")
     for verdict in _FAILURES:
         count = _count(entries, verdict)
         if count:
@@ -172,11 +204,15 @@ def _summary(entries: list[_Entry], new_results: int) -> str:
     return ", ".join(parts)
 
 
-def _detail(flagged: list[_Entry]) -> str:
-    if len(flagged) > 1:
-        return f" (max {max(e.score for e in flagged):.2f})"
-    name, score = flagged[0].tool_name, flagged[0].score
-    return f" ({name}, {score:.2f})" if name else f" ({score:.2f})"
+def _detail(scored: list[_Entry]) -> str:
+    if len(scored) > 1:
+        return f" (max {max(e.score for e in scored):.2f})"
+    entry = scored[0]
+    parts = [entry.tool_name] if entry.tool_name else []
+    parts.append(f"{entry.score:.2f}")
+    if entry.verdict != FLAGGED:
+        parts.append(f"jev {entry.jev:.2f}")
+    return f" ({', '.join(parts)})"
 
 
 def _size(value: Any) -> int:
