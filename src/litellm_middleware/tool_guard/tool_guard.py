@@ -158,7 +158,6 @@ class ToolGuardMiddleware:
             async with asyncio.timeout(self.timeout):
                 first = batches(((h, texts[h]) for h in texts if h in new), known, self.max_batch_bytes)
                 unknown = set(await self._send(first, found, unchecked))
-                unchecked -= unknown & new
                 retry = [h for h in texts if h in unknown and h not in new]
                 follow_up = batches(((h, texts[h]) for h in retry), [], self.max_batch_bytes)
                 await self._send(follow_up, found, unchecked)

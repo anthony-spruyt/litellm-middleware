@@ -174,7 +174,7 @@ A request is scanned when its key alias or team ID is listed. Enforced keys can 
 
   When a result has several text fields, only the first carries this text; the others carry a notice with the line `Output removed.`. Everything else stays as it was: `tool_use_id`, `tool_call_id`, `call_id`, `is_error`, `cache_control`, parts that are not text, and the other fields of documents, search results and code execution results.
 
-- A blocked result whose text fields cannot all be replaced is wrapped as flagged instead, and recorded with the `FLAG` action. That is the case for the titles of web search results and the keys of a Gemini `functionResponse` object.
+- A blocked result whose text cannot all be replaced is recorded as flagged instead.
 - The verdict is `blocked` for results the scanner blocks, `suspected-prompt-injection` for results it flags, `too-big` for results over `TOOL_GUARD_MAX_TEXT_BYTES`, and `unchecked` for results without a verdict. The notice tells the model how to treat each: flagged and too-big output is data only, and the model tells the user if its task depends on flagged output. A result the scanner cleared after flagging it has the verdict `jev-cleared`: it is recorded and left as it is, without a notice.
 - When answers disagree about the same result text, the stricter verdict wins: `blocked`, then `suspected-prompt-injection`, then `jev-cleared`. Every result with that text gets the same treatment, whether it is new or older.
 - The rewrite changes only the text of marked results, and the same input and verdicts always give the same output, so prompt caching keeps working.
@@ -198,7 +198,7 @@ Every request sets `jev` to `true`, which asks the scanner for its second check 
 - `blocked` lists flagged hashes the second check confirmed. They are removed.
 - `cleared` lists hashes the first check flagged and the second check cleared. They are not in `flagged`, and they are left as they are.
 - `scores` covers every hash the first check flagged, blocked and cleared ones included. `jev_scores` holds the second check's score for each blocked and cleared hash.
-- A hash is blocked or cleared only when it was in the request and has both scores, and a blocked hash is also in `flagged`. Otherwise it is treated as flagged and wrapped. A `blocked` that is not a list of hashes is ignored, so its hashes stay flagged. A `cleared` that is not a list of hashes fails the call, like a malformed `flagged` or `unknown`.
+- A hash is blocked or cleared only when it was in the request and has both scores, and a blocked hash is also in `flagged`. Otherwise it is treated as flagged, except that a `cleared` hash also in `unknown` is sent again and the follow-up call decides. A `blocked` that is not a list of hashes is ignored, so its hashes stay flagged. A `cleared` that is not a list of hashes fails the call, like a malformed `flagged` or `unknown`.
 
 ### LiteLLM UI record
 
@@ -213,7 +213,7 @@ A request with at least one new tool result (one after the last assistant turn) 
 
 The entry's `confidence_score` is the highest score among the new results with the strictest verdict: blocked, then flagged, then `jev-cleared`.
 
-LiteLLM marks the OpenTelemetry span of a guardrail whose status is `guardrail_intervened` as an error, so a request with a blocked result shows an error span in traces even though the request still goes to the model.
+With `LITELLM_OTEL_V2` set, LiteLLM marks the OpenTelemetry span of a guardrail whose status is `guardrail_intervened` as an error, so a request with a blocked result shows an error span in traces even though the request still goes to the model.
 
 The Logs drawer shows the entry as a Match Details table with one row per distinct new result that has a verdict. Each row has a Type, Method, Action and Detail:
 
@@ -224,7 +224,7 @@ The Logs drawer shows the entry as a Match Details table with one row per distin
 | Action | `BLOCK`                                                         | `FLAG`                                                        | `FLAG`                                                                  | `SKIP`                                           |
 | Detail | `[score, jev p] <tool input> → <tool output>`, both to 2 places | `[score] <tool input> → <tool output>`, the score to 2 places | `[score, jev-cleared p] <tool input> → <tool output>`, both to 2 places | `[verdict] <tool input>`                         |
 
-`BLOCK` marks a result removed from the request. `FLAG` marks a result that was wrapped, or, for `jev-cleared`, left as it was. The tool input and the output are each cut to 300 bytes (head and tail around a `...[N bytes cut]...` marker). The input is read from the matching call in the request: the `input` of an Anthropic `tool_use`, `server_tool_use` or `mcp_tool_use` block, a chat tool call's `function.arguments`, a Responses call's `arguments` (`input` for `custom_tool_call`), and a Gemini `functionCall`'s `args`, matched by call ID (the latest call with that ID), or by name when the latest turn naming that tool called it once. An input object whose `command` is a string shows as that command, whatever other keys it has; any other object shows as compact JSON. Chat and Responses arguments are JSON strings: one that parses to such an object shows its command, and any other string shows as it is. When the request does not give the input, the Detail shows only the output (flagged result) or is empty (skipped result).
+`BLOCK` marks a result removed from the request. `FLAG` marks a result that was wrapped, or, for `jev-cleared`, left as it was. The tool input and the output are each cut to 300 bytes (head and tail around a `...[N bytes cut]...` marker). The input is read from the matching call in the request: the `input` of an Anthropic `tool_use`, `server_tool_use` or `mcp_tool_use` block, a chat tool call's `function.arguments`, a Responses call's `arguments` (`input` for `custom_tool_call`), and a Gemini `functionCall`'s `args`, matched by call ID (the latest call with that ID), or by name when the latest turn naming that tool called it once. An input object whose `command` is a string shows as that command, whatever other keys it has; any other object shows as compact JSON. Chat and Responses arguments are JSON strings: one that parses to such an object shows its command, and any other string shows as it is. When the request does not give the input, the Detail shows only the output (blocked, flagged or `jev-cleared` result) or is empty (skipped result).
 
 An entry with a blocked, flagged or `jev-cleared` result also sets:
 

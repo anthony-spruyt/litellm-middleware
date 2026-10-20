@@ -122,8 +122,6 @@ def _guardrail() -> Any:
 
 
 def _entry(identify: Identify, result: ToolResult, verdict: str, score: float | None, jev: float | None) -> _Entry:
-    if verdict in (BLOCKED, CLEARED) and jev is None:
-        verdict = FLAGGED
     if verdict in _SCORED and score is None:
         verdict = SCANNER_ERROR
     name, _, tool_input = identify(result)

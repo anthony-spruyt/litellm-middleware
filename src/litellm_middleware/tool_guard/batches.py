@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 
 # Same encoding httpx uses for json=..., so a body's length is the length on the wire.
 _JSON_OPTIONS = {"ensure_ascii": False, "separators": (",", ":"), "allow_nan": False}
-# "jev" opts in to the scanner's blocked and cleared answers.
 _TAIL = b'],"jev":true}'
 _EMPTY_BODY_BYTES = len(b'{"new":[],"known":[' + _TAIL)
 

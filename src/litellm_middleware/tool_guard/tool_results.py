@@ -17,7 +17,6 @@ _NOTICE_TAG = "tool-guard-notice"
 FLAGGED = "suspected-prompt-injection"
 BLOCKED = "blocked"
 CLEARED = "jev-cleared"
-# A hash several answers disagree about takes the strictest one.
 STRICTNESS = {CLEARED: 0, FLAGGED: 1, BLOCKED: 2}
 UNCHECKED = "unchecked"
 TOO_BIG = "too-big"
