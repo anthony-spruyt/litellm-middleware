@@ -6,11 +6,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MARKER = "IGNORE PREVIOUS INSTRUCTIONS"
 SCORE = 0.9731
+BLOCK_MARKER = "JEV-BLOCK"
+CLEAR_MARKER = "JEV-CLEAR"
+BLOCK_SCORE = 0.9512
+CLEAR_SCORE = 0.0312
 FAIL = "SCANNER-FAILS-ON-THIS"
 MAX_BODY_BYTES = int(os.environ.get("FAKE_SCANNER_MAX_BODY_BYTES", "0"))
 received = []
 verdicts = {}
 scores = {}
+second_checks = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -42,12 +47,22 @@ class Handler(BaseHTTPRequestHandler):
             verdicts[item["hash"]] = MARKER in item["text"]
             if verdicts[item["hash"]]:
                 scores[item["hash"]] = SCORE
+                if BLOCK_MARKER in item["text"]:
+                    second_checks[item["hash"]] = ("blocked", BLOCK_SCORE)
+                elif CLEAR_MARKER in item["text"]:
+                    second_checks[item["hash"]] = ("cleared", CLEAR_SCORE)
         flagged = [i["hash"] for i in body["new"] if verdicts[i["hash"]]]
         flagged += [h for h in body["known"] if verdicts.get(h)]
         unknown = [h for h in body["known"] if h not in verdicts]
-        self._json(
-            200, {"flagged": flagged, "unknown": unknown, "scores": {h: scores[h] for h in flagged if h in scores}}
-        )
+        answer = {"flagged": flagged, "unknown": unknown, "scores": {h: scores[h] for h in flagged if h in scores}}
+        if body.get("jev"):
+            blocked = [h for h in flagged if second_checks.get(h, ("",))[0] == "blocked"]
+            cleared = [h for h in flagged if second_checks.get(h, ("",))[0] == "cleared"]
+            answer["flagged"] = [h for h in flagged if h not in cleared]
+            answer["blocked"] = blocked
+            answer["cleared"] = cleared
+            answer["jev_scores"] = {h: second_checks[h][1] for h in [*blocked, *cleared]}
+        self._json(200, answer)
 
     def _json(self, status, payload):
         data = json.dumps(payload).encode()
