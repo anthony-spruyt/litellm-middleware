@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.6.0...v1.7.0) (2026-10-20)
+
+
+### Features
+
+* **tool-guard:** remove blocked tool results and note cleared ones ([#94](https://github.com/anthony-spruyt/litellm-middleware/issues/94)) ([8cf5b3b](https://github.com/anthony-spruyt/litellm-middleware/commit/8cf5b3b94ccad3160d7cc22dc78d9c515b98a960))
+
 ## [1.6.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.5.0...v1.6.0) (2026-10-16)
 
 
