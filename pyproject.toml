@@ -25,6 +25,8 @@ dev = [
 
 [tool.uv]
 exclude-newer = "7 days"
+# certifi is exempt from the age guard so its releases are not delayed
+exclude-newer-package = { certifi = "0 days" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
