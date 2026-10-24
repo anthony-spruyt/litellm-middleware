@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.7.0...v1.7.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** update certifi to 2026.10.23 ([#103](https://github.com/anthony-spruyt/litellm-middleware/issues/103)) ([2a36efc](https://github.com/anthony-spruyt/litellm-middleware/commit/2a36efccd19b8728f62ffb3fe41827986977a14e))
+
 ## [1.7.0](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.6.0...v1.7.0) (2026-10-20)
 
 
