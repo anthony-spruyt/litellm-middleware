@@ -24,6 +24,7 @@ tests/
   unit/                        mirrors the package; litellm is stubbed
   integration/                 boots the real LiteLLM image
 litellm-image.yaml             the pinned LiteLLM image
+cosign/litellm.pub             the key CI verifies that image's signature with
 postgres-image.yaml            the pinned Postgres image for the integration tests
 Dockerfile                     package-only image
 ```
@@ -92,6 +93,15 @@ The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden
 spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `renovate-overrides.json5`. It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
 
 `pyproject.toml` and `uv.lock` aren't checked: the image doesn't ship them.
+
+## Image signature
+
+The `verify-litellm-image` job in `.github/workflows/ci-repo.yaml` runs `cosign verify --key cosign/litellm.pub` on the `image` in `litellm-image.yaml`. It runs on every CI run, and if it fails, `repo` fails and the `image` job, which starts the pinned image for the integration tests, is skipped.
+
+- `cosign/litellm.pub` is the key LiteLLM signs its release images with: [`cosign.pub` in BerriAI/litellm at `e82a3c64`](https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub). Its sha256 is `e3fe3e08c44b16407fe0b37c43b4f8b603b3a0f4ee74c29e647bc022d762c2c0`.
+- An image signed with a different key fails the check, so a key change goes through a PR.
+- To rotate it, open a PR that replaces `cosign/litellm.pub` with the `cosign.pub` pinned at the upstream commit that holds the new key (commit SHA in the URL), check its sha256 against the one upstream announces, and update the sha256 above.
+- spruyt-labs' Kyverno policy `verify-litellm-image` holds the same key inline, so rotate it there too: add the new key as a second attestor first, and drop the old one once the cluster runs an image signed with the new key.
 
 ## Rate-limit headers
 
