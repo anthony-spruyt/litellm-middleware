@@ -85,7 +85,7 @@ class Counter:
         seen.update(kwargs)
 
 asyncio.run(ps._try_provider_token_count(
-    provider_counter=Counter(), custom_llm_provider="anthropic", model_to_use="m", contents=None,
+    Counter(), "anthropic", "m", None, contents=None,
     deployment=None, request_model="m", messages=[{"role": "user", "content": sys.argv[1]}],
     system=sys.argv[1], tools=None))
 print(json.dumps(seen))

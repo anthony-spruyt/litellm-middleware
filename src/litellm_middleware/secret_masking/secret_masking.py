@@ -7,6 +7,7 @@ import codecs
 import copy
 import hashlib
 import hmac
+import inspect
 import json
 import os
 import re
@@ -1065,15 +1066,16 @@ def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_serve
     if getattr(original, "_secret_masking", False):
         return
 
+    signature = inspect.signature(original)
+
     async def masked(*args, **kwargs):
         try:
-            if args:
-                raise TypeError("positional arguments cannot be masked")
-            kwargs = middleware.mask_token_count(kwargs)
+            call = signature.bind(*args, **kwargs)
+            call.arguments = middleware.mask_token_count(call.arguments)
         except Exception as exc:  # noqa: BLE001 - None makes LiteLLM count locally instead
             _log_warning("secret masking token count failed closed: %s", type(exc).__name__)
             return None
-        return await original(**kwargs)
+        return await original(*call.args, **call.kwargs)
 
     masked._secret_masking = True
     proxy_server._try_provider_token_count = masked

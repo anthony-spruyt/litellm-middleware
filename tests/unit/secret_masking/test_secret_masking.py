@@ -1707,41 +1707,131 @@ async def test_google_stream_end_flushes_held_text(mw):
     assert _gemini_parse(out)[1] == "key " + fake[:10]
 
 
-def _proxy_server_with_counter():
+def _proxy_server_with_counter(result="count"):
     proxy_server = types.ModuleType("litellm.proxy.proxy_server")
     proxy_server.sent = []
 
-    async def _try_provider_token_count(**kwargs):
-        proxy_server.sent.append(kwargs)
-        return "count"
+    async def _try_provider_token_count(  # noqa: PLR0913, PLR0917 - mirrors LiteLLM's signature
+        provider_counter,
+        custom_llm_provider,
+        model_to_use,
+        region,
+        messages,
+        contents,
+        deployment,
+        request_model,
+        tools=None,
+        system=None,
+        messages_format="openai",
+        output_format=None,
+    ):
+        proxy_server.sent.append(
+            {
+                "provider_counter": provider_counter,
+                "custom_llm_provider": custom_llm_provider,
+                "model_to_use": model_to_use,
+                "region": region,
+                "messages": messages,
+                "contents": contents,
+                "deployment": deployment,
+                "request_model": request_model,
+                "tools": tools,
+                "system": system,
+                "messages_format": messages_format,
+                "output_format": output_format,
+            }
+        )
+        return result
 
     proxy_server._try_provider_token_count = _try_provider_token_count
     return proxy_server
 
 
-async def test_provider_token_count_is_masked(mw, mod):
-    proxy_server = _proxy_server_with_counter()
-    mod.install_token_count_masking(mw, proxy_server)
+def _token_count_request(**overrides):
+    return {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": GH_PAT}]}],
+        "contents": [{"role": "user", "parts": [{"text": GOOGLE}]}],
+        "deployment": {"litellm_params": {"api_key": "provider-key"}},
+        "request_model": "m",
+        "tools": [{"name": "t", "description": f"uses {SL_KEY}"}],
+        "system": f"env {GH_PAT_2}",
+        **overrides,
+    }
 
-    result = await proxy_server._try_provider_token_count(
-        provider_counter=None,
-        custom_llm_provider="anthropic",
-        model_to_use="m",
-        messages=[{"role": "user", "content": [{"type": "text", "text": GH_PAT}]}],
-        contents=[{"role": "user", "parts": [{"text": GOOGLE}]}],
-        deployment={"litellm_params": {"api_key": "provider-key"}},
-        request_model="m",
-        tools=[{"name": "t", "description": f"uses {SL_KEY}"}],
-        system=f"env {GH_PAT_2}",
-    )
 
-    assert result == "count"
-    sent = proxy_server.sent[0]
+def _assert_masked(sent):
     dumped = json.dumps({k: sent[k] for k in ("messages", "contents", "tools", "system")})
     for secret in (GH_PAT, GOOGLE, SL_KEY, GH_PAT_2):
         assert secret not in dumped
     assert sent["deployment"] == {"litellm_params": {"api_key": "provider-key"}}
+
+
+async def test_provider_token_count_is_masked(mw, mod):
+    proxy_server = _proxy_server_with_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+    counter = object()
+
+    result = await proxy_server._try_provider_token_count(
+        counter, "anthropic", "claude-m", "us-east-1", **_token_count_request()
+    )
+
+    assert result == "count"
+    sent = proxy_server.sent[0]
+    _assert_masked(sent)
+    assert sent["provider_counter"] is counter
+    assert (sent["custom_llm_provider"], sent["model_to_use"], sent["region"]) == ("anthropic", "claude-m", "us-east-1")
     assert mw.pending_calls() == 0
+
+
+async def test_provider_token_count_masks_when_every_argument_is_positional(mw, mod):
+    proxy_server = _proxy_server_with_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+    request = _token_count_request()
+
+    await proxy_server._try_provider_token_count(
+        None,
+        "anthropic",
+        "m",
+        None,
+        request["messages"],
+        request["contents"],
+        request["deployment"],
+        request["request_model"],
+        request["tools"],
+        request["system"],
+    )
+
+    _assert_masked(proxy_server.sent[0])
+
+
+async def test_provider_token_count_forwards_format_arguments_untouched(mw, mod):
+    proxy_server = _proxy_server_with_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+    output_format = {"type": "json_schema", "schema": {"type": "object"}}
+
+    await proxy_server._try_provider_token_count(
+        None,
+        "anthropic",
+        "m",
+        None,
+        **_token_count_request(),
+        messages_format="anthropic",
+        output_format=output_format,
+    )
+
+    sent = proxy_server.sent[0]
+    assert sent["messages_format"] == "anthropic"
+    assert sent["output_format"] == output_format
+
+
+async def test_provider_token_count_returns_the_provider_failure_unchanged(mw, mod):
+    failure = types.SimpleNamespace(status_code=400, message="invalid request")
+    proxy_server = _proxy_server_with_counter(result=failure)
+    mod.install_token_count_masking(mw, proxy_server)
+
+    result = await proxy_server._try_provider_token_count(None, "anthropic", "m", None, **_token_count_request())
+
+    assert result is failure
 
 
 async def test_provider_token_count_masking_is_installed_once(mw, mod):
@@ -1749,7 +1839,9 @@ async def test_provider_token_count_masking_is_installed_once(mw, mod):
     mod.install_token_count_masking(mw, proxy_server)
     mod.install_token_count_masking(mw, proxy_server)
 
-    await proxy_server._try_provider_token_count(messages=[{"role": "user", "content": GH_PAT}])
+    await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(messages=[{"role": "user", "content": GH_PAT}])
+    )
 
     assert len(proxy_server.sent) == 1
 
@@ -1763,13 +1855,15 @@ async def test_provider_token_count_falls_back_to_local_when_masking_fails(mw, m
 
     monkeypatch.setattr(mod, "_map_strings", broken)
 
-    result = await proxy_server._try_provider_token_count(messages=[{"role": "user", "content": GH_PAT}])
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(messages=[{"role": "user", "content": GH_PAT}])
+    )
 
     assert result is None
     assert proxy_server.sent == []
 
 
-async def test_provider_token_count_with_positional_args_counts_locally(mw, mod):
+async def test_provider_token_count_with_arguments_the_signature_rejects_counts_locally(mw, mod):
     proxy_server = _proxy_server_with_counter()
     mod.install_token_count_masking(mw, proxy_server)
 
