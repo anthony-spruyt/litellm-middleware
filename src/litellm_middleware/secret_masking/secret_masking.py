@@ -1100,7 +1100,7 @@ def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_serve
             "secret masking: _try_provider_token_count has an unrecognised signature; provider token counts are off"
         )
 
-        async def unavailable(*_args, **_kwargs):
+        async def unavailable(*_args, **_kwargs):  # NOSONAR - LiteLLM awaits the call
             return None
 
         unavailable._secret_masking = True
