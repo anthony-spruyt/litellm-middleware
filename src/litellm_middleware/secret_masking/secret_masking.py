@@ -7,6 +7,7 @@ import codecs
 import copy
 import hashlib
 import hmac
+import inspect
 import json
 import os
 import re
@@ -109,6 +110,24 @@ _MASKED_FIELDS = {
 # LiteLLM runs no post-call hook for websocket replies, so there is nothing to release the call state.
 _NO_REPLY_HOOKS = frozenset({"_aresponses_websocket"})
 _TOKEN_COUNT_FIELDS = frozenset({"messages", "contents", "tools", "system"})
+# LiteLLM 1.106.4's parameters; a function with any other signature gets no provider token counts.
+_TOKEN_COUNT_PARAMETERS = frozenset(
+    {
+        "provider_counter",
+        "custom_llm_provider",
+        "model_to_use",
+        "region",
+        "messages",
+        "contents",
+        "deployment",
+        "request_model",
+        "tools",
+        "system",
+        "messages_format",
+        "output_format",
+    }
+)
+_CATCH_ALL_KINDS = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 _STREAM_DELTA_FIELDS = {"text_delta": "text", "input_json_delta": "partial_json"}
 # Responses API: delta event -> (done event, field on the done event holding the full text).
 _RESPONSES_DELTAS = {
@@ -1056,6 +1075,16 @@ def _key_from_env() -> bytes:
     return hmac.new(salt.encode(), b"litellm-secret-masking", hashlib.sha256).digest()
 
 
+def _known_token_count_signature(function: Any) -> inspect.Signature | None:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return None
+    if any(p.kind in _CATCH_ALL_KINDS for p in signature.parameters.values()):
+        return None
+    return signature if signature.parameters.keys() == _TOKEN_COUNT_PARAMETERS else None
+
+
 def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_server: Any) -> None:
     """Masks the body /v1/messages/count_tokens and friends send to the provider; they skip every proxy hook."""
     original = getattr(proxy_server, "_try_provider_token_count", None)
@@ -1065,15 +1094,27 @@ def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_serve
     if getattr(original, "_secret_masking", False):
         return
 
+    signature = _known_token_count_signature(original)
+    if signature is None:
+        _log_warning(
+            "secret masking: _try_provider_token_count has an unrecognised signature; provider token counts are off"
+        )
+
+        async def unavailable(*_args, **_kwargs):  # NOSONAR - LiteLLM awaits the call
+            return None
+
+        unavailable._secret_masking = True
+        proxy_server._try_provider_token_count = unavailable
+        return
+
     async def masked(*args, **kwargs):
         try:
-            if args:
-                raise TypeError("positional arguments cannot be masked")
-            kwargs = middleware.mask_token_count(kwargs)
+            call = signature.bind(*args, **kwargs)
+            call.arguments = middleware.mask_token_count(call.arguments)
         except Exception as exc:  # noqa: BLE001 - None makes LiteLLM count locally instead
             _log_warning("secret masking token count failed closed: %s", type(exc).__name__)
             return None
-        return await original(**kwargs)
+        return await original(*call.args, **call.kwargs)
 
     masked._secret_masking = True
     proxy_server._try_provider_token_count = masked

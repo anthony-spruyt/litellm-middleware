@@ -27,6 +27,10 @@ def _sent_upstream(proxy, token: str) -> str:
     return sent
 
 
+def _count_tokens_received(proxy) -> list[dict]:
+    return [r["body"] for r in proxy.upstream_received() if r["path"].startswith("/v1/messages/count_tokens")]
+
+
 def test_proxy_starts_without_middleware_errors(proxy):
     logs = proxy.logs()
     assert "failed to load" not in logs
@@ -85,7 +89,7 @@ class Counter:
         seen.update(kwargs)
 
 asyncio.run(ps._try_provider_token_count(
-    provider_counter=Counter(), custom_llm_provider="anthropic", model_to_use="m", contents=None,
+    Counter(), "anthropic", "m", None, contents=None,
     deployment=None, request_model="m", messages=[{"role": "user", "content": sys.argv[1]}],
     system=sys.argv[1], tools=None))
 print(json.dumps(seen))
@@ -102,6 +106,28 @@ def test_provider_token_count_is_masked(proxy):
     assert '"messages"' in sent
     assert '"system"' in sent
     assert token not in sent
+
+
+def test_count_tokens_endpoint_counts_at_the_provider_with_secrets_masked(proxy):
+    token = _github_token()
+    before = len(_count_tokens_received(proxy))
+
+    resp = proxy.client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": MODEL,
+            "system": f"env {token}",
+            "messages": [{"role": "user", "content": f"my token is {token} ok"}],
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["litellm_count_source"] == "provider", resp.text
+    received = _count_tokens_received(proxy)[before:]
+    assert received, "the provider was never asked to count"
+    sent = json.dumps(received)
+    assert token not in sent, "real secret reached the provider"
+    assert "ghp_" in sent, "fake should keep the recognisable prefix"
 
 
 @pytest.mark.parametrize("stream", [False, True])
