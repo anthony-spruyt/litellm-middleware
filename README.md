@@ -48,7 +48,7 @@ uv run ruff check . && uv run ruff format --check .
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
 - The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval). It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
-- `/v1/messages/count_tokens` goes to the fake upstream, and its test asserts the reply's `litellm_count_source` is `provider`. A second test calls the wrapped `_try_provider_token_count` inside the container, which also covers the Google `contents` field.
+- `/v1/messages/count_tokens` goes to the fake upstream, and its test asserts the reply's `litellm_count_source` is `provider`. A second test calls the wrapped `_try_provider_token_count` inside the container.
 
 ## Deployment
 
@@ -101,7 +101,7 @@ The `verify-litellm-image` job in `.github/workflows/ci-repo.yaml` runs `cosign 
 - `cosign/litellm.pub` is the key LiteLLM signs its release images with: [`cosign.pub` in BerriAI/litellm at `e82a3c64`](https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub). Its sha256 is `e3fe3e08c44b16407fe0b37c43b4f8b603b3a0f4ee74c29e647bc022d762c2c0`.
 - An image signed with a different key fails the check, so a key change goes through a PR.
 - To rotate it, open one PR that replaces `cosign/litellm.pub` with the `cosign.pub` pinned at the upstream commit holding the new key (commit SHA in the URL) and bumps `litellm-image.yaml` to an image signed with it, because the job checks the image pinned in the same PR.
-- Upstream publishes no sha256 for the key: check the commit against the "Verify Docker Image Signatures" section of upstream's README, then update the sha256 above to the new file's.
+- Upstream publishes no sha256 for the key: check the commit against the "Verify Docker Image Signatures" section of upstream's README on `main`, then update the sha256 above to the new file's.
 - spruyt-labs' Kyverno policy `verify-litellm-image` holds the same key inline, so rotate it there too: add the new key as a second attestor first, and drop the old one once the cluster runs an image signed with the new key.
 
 ## Rate-limit headers
