@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.7.1...v1.7.2) (2026-10-26)
+
+
+### Bug Fixes
+
+* **secret-masking:** support LiteLLM 1.106.4 token counts and verify its image ([#109](https://github.com/anthony-spruyt/litellm-middleware/issues/109)) ([5a8e486](https://github.com/anthony-spruyt/litellm-middleware/commit/5a8e486db9c0234b31e4083b5876efc8399767f7))
+
 ## [1.7.1](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.7.0...v1.7.1) (2026-10-24)
 
 
