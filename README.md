@@ -48,7 +48,7 @@ uv run ruff check . && uv run ruff format --check .
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
 - The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval). It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
-- `count_tokens` ignores `api_base` and always calls `api.anthropic.com`, so its integration test calls the wrapped `_try_provider_token_count` inside the container instead of going over HTTP.
+- `/v1/messages/count_tokens` goes to the fake upstream, and its test asserts the reply's `litellm_count_source` is `provider`. A second test calls the wrapped `_try_provider_token_count` inside the container, which also covers the Google `contents` field.
 
 ## Deployment
 
@@ -100,7 +100,8 @@ The `verify-litellm-image` job in `.github/workflows/ci-repo.yaml` runs `cosign 
 
 - `cosign/litellm.pub` is the key LiteLLM signs its release images with: [`cosign.pub` in BerriAI/litellm at `e82a3c64`](https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub). Its sha256 is `e3fe3e08c44b16407fe0b37c43b4f8b603b3a0f4ee74c29e647bc022d762c2c0`.
 - An image signed with a different key fails the check, so a key change goes through a PR.
-- To rotate it, open a PR that replaces `cosign/litellm.pub` with the `cosign.pub` pinned at the upstream commit that holds the new key (commit SHA in the URL), check its sha256 against the one upstream announces, and update the sha256 above.
+- To rotate it, open one PR that replaces `cosign/litellm.pub` with the `cosign.pub` pinned at the upstream commit holding the new key (commit SHA in the URL) and bumps `litellm-image.yaml` to an image signed with it, because the job checks the image pinned in the same PR.
+- Upstream publishes no sha256 for the key: check the commit against the "Verify Docker Image Signatures" section of upstream's README, then update the sha256 above to the new file's.
 - spruyt-labs' Kyverno policy `verify-litellm-image` holds the same key inline, so rotate it there too: add the new key as a second attestor first, and drop the old one once the cluster runs an image signed with the new key.
 
 ## Rate-limit headers
@@ -135,6 +136,8 @@ It swaps fakes in the reply back to the real values, including streamed text and
 - Only prefixed formats are caught. Bare high-entropy strings (hashes, UUIDs, unprefixed passwords) pass through so commit SHAs and similar values aren't mangled.
 - Thinking and reasoning blocks, base64 sources, `data:` URLs, `input_audio` and remote image/file URLs are never touched.
 - The fake-to-real map is kept per virtual key for an hour, so a fake the model echoes from an earlier turn is still swapped back. Each pod keeps its own map in memory (capped at 2000 fakes).
+- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly the parameters of LiteLLM 1.106.4's (`_TOKEN_COUNT_PARAMETERS`) and no `*args` or `**kwargs`.
+- Any other signature logs one warning at startup, and the wrapper returns `None`, so LiteLLM counts locally and no content goes to the provider. A LiteLLM bump that changes the parameters needs that set updated, with any new content parameter masked.
 - `shared_fakes.py` shares the map through Redis/Valkey (needs `HSETEX`, Valkey 9+) when both `REDIS_HOST` and `LITELLM_SALT_KEY` are set (`REDIS_PORT`, `REDIS_USERNAME` and `REDIS_PASSWORD` are optional). Entries are AES-GCM encrypted with a key derived from `LITELLM_SALT_KEY`. Sharing is best effort: if the store is unreachable, the pod restores from its own memory.
 
 ## Tool guard

@@ -7,6 +7,7 @@ on:
 permissions: {}
 jobs:
   verify-litellm-image:
+    name: "Verify LiteLLM image signature"
     runs-on: "ubuntu-latest"
     timeout-minutes: 10
     permissions:
@@ -15,6 +16,7 @@ jobs:
       - name: "Harden Runner"
         uses: "anthony-spruyt/repo-operator/.github/actions/harden-runner@6364775b2e73a9cd1bf3cb639a6c8c12a5cda41b" # main
         with:
+          disable-sudo-and-containers: true
           allowed-endpoints: >-
             api.github.com:443
             ghcr.io:443
@@ -32,4 +34,8 @@ jobs:
       - name: "Verify the pinned LiteLLM image signature"
         run: |
           image="$(yq -r '.image' litellm-image.yaml)"
+          if ! [[ "$image" =~ ^ghcr\.io/berriai/litellm-non_root:[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error file=litellm-image.yaml::image must be ghcr.io/berriai/litellm-non_root:<tag>@sha256:<digest>"
+            exit 1
+          fi
           cosign verify --key cosign/litellm.pub "$image"
