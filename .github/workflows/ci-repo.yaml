@@ -6,9 +6,36 @@ on:
   workflow_call: {}
 permissions: {}
 jobs:
-  no-repo-jobs:
-    name: "No repo jobs yet"
-    if: "github.event_name == 'never'"
+  verify-litellm-image:
+    name: "Verify LiteLLM image signature"
     runs-on: "ubuntu-latest"
+    timeout-minutes: 10
+    permissions:
+      contents: "read"
     steps:
-      - run: "true"
+      - name: "Harden Runner"
+        uses: "anthony-spruyt/repo-operator/.github/actions/harden-runner@6364775b2e73a9cd1bf3cb639a6c8c12a5cda41b" # main
+        with:
+          disable-sudo-and-containers: true
+          allowed-endpoints: >-
+            api.github.com:443
+            ghcr.io:443
+            github.com:443
+            pkg-containers.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            tuf-repo-cdn.sigstore.dev:443
+      - name: "Checkout"
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+        with:
+          persist-credentials: false
+      - name: "Install cosign"
+        uses: "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" # v4.1.2
+      - name: "Verify the pinned LiteLLM image signature"
+        run: |
+          image="$(yq -r '.image' litellm-image.yaml)"
+          if ! [[ "$image" =~ ^ghcr\.io/berriai/litellm-non_root:[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error file=litellm-image.yaml::image must be ghcr.io/berriai/litellm-non_root:<tag>@sha256:<digest>"
+            exit 1
+          fi
+          cosign verify --key cosign/litellm.pub "$image"
