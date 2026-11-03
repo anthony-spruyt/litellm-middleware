@@ -43,11 +43,14 @@ uv run ruff check . && uv run ruff format --check .
 ```
 
 - **Unit** tests run each middleware against a stubbed `litellm`. They are fast, but they can't catch LiteLLM renaming a hook or changing its signature or call order.
-- **Integration** tests need a container runtime. They build the `Dockerfile`, unpack the image's files, and mount them read-only into the pinned LiteLLM image at the same path and with the same `PYTHONPATH` as production. A fake upstream (Anthropic and OpenAI formats) and a fake tool-guard scanner run in the same container. Each test sends a real request and checks what reached the upstream and what came back.
+- **Integration** tests need a container runtime. They build the `Dockerfile`, unpack the image's files, and mount them read-only into the pinned LiteLLM image at the same path and with the same `PYTHONPATH` as production. A fake upstream (Anthropic and OpenAI formats) and a fake tool-guard scanner run in the same container.
+  Each test sends a real request and checks what reached the upstream and what came back.
 - CI runs both suites on Python 3.13, the LiteLLM image's interpreter (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
-- The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval). It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network. A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
+- The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval).
+  It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network.
+  A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
 - `/v1/messages/count_tokens` goes to the fake upstream, and its test asserts the reply's `litellm_count_source` is `provider`. A second test calls the wrapped `_try_provider_token_count` inside the container.
 
 ## Deployment
@@ -90,7 +93,8 @@ The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden
 
 `litellm-image.yaml` pins the LiteLLM image (tag and digest) the integration tests run against. Renovate tracks it through its `# renovate:` annotation, so a LiteLLM bump PR here runs the integration suite against the new version.
 
-spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `renovate-overrides.json5`. It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
+spruyt-labs takes its LiteLLM version and digest from this file on `main`, not from the registry, so the cluster can only move to a LiteLLM that passed CI here. Don't rename or move the file, or reshape its `image` value, without updating the `litellm-middleware-tested` custom datasource in spruyt-labs' `renovate-overrides.json5`.
+It sits at the repo root because Renovate's `config:recommended` ignores `**/tests/**`.
 
 `pyproject.toml` and `uv.lock` aren't checked: the image doesn't ship them.
 
@@ -115,9 +119,12 @@ LiteLLM renames every non-OpenAI upstream header to `llm_provider-<name>` and ha
 
 ## Fallback auth
 
-LiteLLM attaches the client's `Authorization` header to the request before routing, and for a `Bearer sk-ant-oat...` token it overrides the deployment's `api_key`. A router fallback reuses those request kwargs, so an `anthropic-api/<model>` fallback deployment would send the client's token instead of its own key. `fallback_auth/` runs from `async_pre_call_deployment_hook`, after the deployment is chosen, and for deployments whose model name starts with `anthropic-api/` removes `authorization`, `x-api-key` and the `oauth-*` tokens of `anthropic-beta` (the header goes if none are left).
+LiteLLM attaches the client's `Authorization` header to the request before routing, and for a `Bearer sk-ant-oat...` token it overrides the deployment's `api_key`. A router fallback reuses those request kwargs, so an `anthropic-api/<model>` fallback deployment would send the client's token instead of its own key.
+`fallback_auth/` runs from `async_pre_call_deployment_hook`, after the deployment is chosen, and for deployments whose model name starts with `anthropic-api/` removes `authorization`, `x-api-key` and the `oauth-*` tokens of `anthropic-beta` (the header goes if none are left).
 
-- The deployment's model name is `deployment_model_name`, which the router writes for each attempt into the bucket that matches the call type: `kwargs["litellm_metadata"]` for `anthropic_messages`, `aanthropic_messages`, `aresponses` and `responses` (`/v1/messages`, `/v1/responses`), and `kwargs["metadata"]` for `acompletion`, `completion`, `atext_completion` and `text_completion` (`/v1/chat/completions`). Only that bucket is read, and the requested `model_group` plays no part. The headers come from `kwargs["headers"]`, `kwargs["extra_headers"]` and the `extra_headers` of each `kwargs["provider_specific_header"]` entry.
+- The deployment's model name is `deployment_model_name`, which the router writes for each attempt into the bucket that matches the call type:
+  `kwargs["litellm_metadata"]` for `anthropic_messages`, `aanthropic_messages`, `aresponses` and `responses` (`/v1/messages`, `/v1/responses`), and `kwargs["metadata"]` for `acompletion`, `completion`, `atext_completion` and `text_completion` (`/v1/chat/completions`). Only that bucket is read, and the requested `model_group` plays no part.
+  The headers come from `kwargs["headers"]`, `kwargs["extra_headers"]` and the `extra_headers` of each `kwargs["provider_specific_header"]` entry.
 - It returns copies, so the kwargs the router reuses for the next attempt are unchanged.
 - If scrubbing raises for an `anthropic-api/*` deployment, all three header containers (`headers`, `extra_headers`, `provider_specific_header`) are dropped from the returned copy. Both that and a failed deployment lookup log a warning with the exception type name, never header values.
 - `anthropic-beta` values given as `str`, `bytes`, `list` or `tuple` are scrubbed and keep their type.
@@ -142,7 +149,8 @@ It swaps fakes in the reply back to the real values, including streamed text and
 
 ## Tool guard
 
-`tool_guard/` sends tool results to a scanner before the request goes upstream. It marks each result the scanner flags, or that could not be checked, with a notice that names its verdict and tells the model the text is tool data, not instructions, and wraps the text in a marker. A result the scanner blocks loses its text: a fixed notice replaces it. It runs after `secret-masking`, so the scanner only sees masked text. It reads tool results from:
+`tool_guard/` sends tool results to a scanner before the request goes upstream. It marks each result the scanner flags, or that could not be checked, with a notice that names its verdict and tells the model the text is tool data, not instructions, and wraps the text in a marker. A result the scanner blocks loses its text: a fixed notice replaces it.
+It runs after `secret-masking`, so the scanner only sees masked text. It reads tool results from:
 
 - `/v1/messages`: `tool_result` blocks in user turns, including nested `document` and `search_result` blocks, and server tool results (`web_fetch_tool_result`, `mcp_tool_result` and other `*_tool_result` blocks) in assistant turns
 - `/v1/chat/completions`: `role: tool` and `role: function` messages
@@ -163,7 +171,8 @@ A request is scanned when its key alias or team ID is listed. Enforced keys can 
 - Each tool result is identified by `sha256:` plus the hex SHA-256 of its text: the string content, or its text fields joined in order with newlines. For Gemini `functionResponse`, the text fields are the object keys and string values of `response`.
 - Results after the last assistant turn, and server tool results in the last assistant turn, go to the scanner with their text. Older results go by hash only, so the scanner answers from its verdict cache.
 - A tool result larger than `TOOL_GUARD_MAX_TEXT_BYTES` (UTF-8) is marked `too-big` without a scanner call.
-- Scanner requests are split into batches whose JSON body is at most `TOOL_GUARD_MAX_BATCH_BYTES`, so the body limit is counted on the encoded text (quotes and control characters take 2 to 6 bytes). Batches are sent one after another, newest results first, inside the same time limit. A tool result whose encoded size alone exceeds `TOOL_GUARD_MAX_BATCH_BYTES` is marked `unchecked` without a scanner call. Keep the value below the scanner's request body limit.
+- Scanner requests are split into batches whose JSON body is at most `TOOL_GUARD_MAX_BATCH_BYTES`, so the body limit is counted on the encoded text (quotes and control characters take 2 to 6 bytes). Batches are sent one after another, newest results first, inside the same time limit.
+  A tool result whose encoded size alone exceeds `TOOL_GUARD_MAX_BATCH_BYTES` is marked `unchecked` without a scanner call. Keep the value below the scanner's request body limit.
 - A marked result becomes a notice followed by the wrapped text, in the same field as before:
 
   ```text
@@ -188,7 +197,8 @@ A request is scanned when its key alias or team ID is listed. Enforced keys can 
   When a result has several text fields, only the first carries this text; the others carry a notice with the line `Output removed.`. Everything else stays as it was: `tool_use_id`, `tool_call_id`, `call_id`, `is_error`, `cache_control`, parts that are not text, and any other field of the result.
 
 - A blocked result whose text cannot all be replaced is recorded as flagged instead.
-- The verdict is `blocked` for results the scanner blocks, `suspected-prompt-injection` for results it flags, `too-big` for results over `TOOL_GUARD_MAX_TEXT_BYTES`, and `unchecked` for results without a verdict. The notice tells the model how to treat each: flagged and too-big output is data only, and the model tells the user if its task depends on flagged output. A result the scanner cleared after flagging it has the verdict `jev-cleared`: it is recorded and left as it is, without a notice.
+- The verdict is `blocked` for results the scanner blocks, `suspected-prompt-injection` for results it flags, `too-big` for results over `TOOL_GUARD_MAX_TEXT_BYTES`, and `unchecked` for results without a verdict. The notice tells the model how to treat each: flagged and too-big output is data only, and the model tells the user if its task depends on flagged output.
+  A result the scanner cleared after flagging it has the verdict `jev-cleared`: it is recorded and left as it is, without a notice.
 - When answers disagree about the same result text, the stricter verdict wins: `blocked`, then `suspected-prompt-injection`, then `jev-cleared`. Every result with that text gets the same treatment, whether it is new or older.
 - The rewrite changes only the text of marked results, and the same input and verdicts always give the same output, so prompt caching keeps working.
 - When a scanner call fails or runs out of time, every result in the request without a verdict from a completed call is marked `unchecked`. Errors and timeouts are logged as `tool guard scan error: <error>`.
@@ -211,7 +221,8 @@ Every request sets `jev` to `true`, which asks the scanner for its second check 
 - `blocked` lists flagged hashes the second check confirmed. They are removed.
 - `cleared` lists hashes the first check flagged and the second check cleared. They are not in `flagged`, and they are left as they are.
 - `scores` covers every hash the first check flagged, blocked and cleared ones included. `jev_scores` holds the second check's score for each blocked and cleared hash.
-- A hash is blocked or cleared only when it was in the request and has both scores, and a blocked hash is also in `flagged`. Otherwise it is treated as flagged, except that a `cleared` hash also in `unknown` is sent again and the follow-up call decides. A `blocked` that is not a list of hashes is ignored, so its hashes stay flagged. A `cleared` that is not a list of hashes fails the call, like a malformed `flagged` or `unknown`.
+- A hash is blocked or cleared only when it was in the request and has both scores, and a blocked hash is also in `flagged`. Otherwise it is treated as flagged, except that a `cleared` hash also in `unknown` is sent again and the follow-up call decides. A `blocked` that is not a list of hashes is ignored, so its hashes stay flagged.
+  A `cleared` that is not a list of hashes fails the call, like a malformed `flagged` or `unknown`.
 
 ### LiteLLM UI record
 
@@ -237,7 +248,10 @@ The Logs drawer shows the entry as a Match Details table with one row per distin
 | Action | `BLOCK`                                                         | `FLAG`                                                        | `FLAG`                                                                  | `SKIP`                                           |
 | Detail | `[score, jev p] <tool input> → <tool output>`, both to 2 places | `[score] <tool input> → <tool output>`, the score to 2 places | `[score, jev-cleared p] <tool input> → <tool output>`, both to 2 places | `[verdict] <tool input>`                         |
 
-`BLOCK` marks a result removed from the request. `FLAG` marks a flagged result, or one cleared after it was flagged (`jev-cleared`). The tool input and the output are each cut to 300 bytes (head and tail around a `...[N bytes cut]...` marker). The input is read from the matching call in the request: the `input` of an Anthropic `tool_use`, `server_tool_use` or `mcp_tool_use` block, a chat tool call's `function.arguments`, a Responses call's `arguments` (`input` for `custom_tool_call`), and a Gemini `functionCall`'s `args`, matched by call ID (the latest call with that ID), or by name when the latest turn naming that tool called it once. An input object whose `command` is a string shows as that command, whatever other keys it has; any other object shows as compact JSON. Chat and Responses arguments are JSON strings: one that parses to such an object shows its command, and any other string shows as it is. When the request does not give the input, the Detail shows only the output (blocked, flagged or `jev-cleared` result) or is empty (skipped result).
+`BLOCK` marks a result removed from the request. `FLAG` marks a flagged result, or one cleared after it was flagged (`jev-cleared`). The tool input and the output are each cut to 300 bytes (head and tail around a `...[N bytes cut]...` marker).
+The input is read from the matching call in the request: the `input` of an Anthropic `tool_use`, `server_tool_use` or `mcp_tool_use` block, a chat tool call's `function.arguments`, a Responses call's `arguments` (`input` for `custom_tool_call`), and a Gemini `functionCall`'s `args`, matched by call ID (the latest call with that ID),
+or by name when the latest turn naming that tool called it once. An input object whose `command` is a string shows as that command, whatever other keys it has; any other object shows as compact JSON. Chat and Responses arguments are JSON strings: one that parses to such an object shows its command, and any other string shows as it is.
+When the request does not give the input, the Detail shows only the output (blocked, flagged or `jev-cleared` result) or is empty (skipped result).
 
 An entry with a blocked, flagged or `jev-cleared` result also sets:
 
@@ -250,9 +264,11 @@ An entry with none of those sets `detection_method`, plus `match_details` when i
 
 `guardrail_response` holds a `summary` string and `counts`, the number of distinct new results per verdict (`blocked`, `suspected-prompt-injection`, `jev-cleared`, `scanner-error`, `unchecked` and `too-big`). The whole record is kept under 64 KiB: past that, trailing rows are dropped and counted in `omitted`.
 
-LiteLLM replaces `guardrail_response`, `match_details` and `classification` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status, `confidence_score` and `detection_method`, but not the summary, the Match Details rows or the classification. LiteLLM v1.105.0's drawer does not render `violation_categories` and `guardrail_action`; they are visible in the Metadata JSON. The setting also stores request and response bodies in the spend logs.
+LiteLLM replaces `guardrail_response`, `match_details` and `classification` with `REDACTED_BY_LITELM` in the spend logs unless `general_settings.store_prompts_in_spend_logs` is `true`. Without it the Logs drawer still shows the status, `confidence_score` and `detection_method`, but not the summary, the Match Details rows or the classification.
+LiteLLM v1.105.0's drawer does not render `violation_categories` and `guardrail_action`; they are visible in the Metadata JSON. The setting also stores request and response bodies in the spend logs.
 
-The Guardrails Monitor opens a per-guardrail detail page from the overview row, and that page only loads for a guardrail LiteLLM has registered. `tool_guard/placeholder.py` ships `ToolGuardPlaceholder`, a `CustomGuardrail` with no hooks, so it never blocks, changes or records anything, even if a caller opts in with `guardrails: ["tool-guard"]`. The record still comes from the middleware. Register it in the proxy config; the dotted path resolves through `PYTHONPATH`, so it works with the mount described under Deployment:
+The Guardrails Monitor opens a per-guardrail detail page from the overview row, and that page only loads for a guardrail LiteLLM has registered. `tool_guard/placeholder.py` ships `ToolGuardPlaceholder`, a `CustomGuardrail` with no hooks, so it never blocks, changes or records anything, even if a caller opts in with `guardrails: ["tool-guard"]`. The record still comes from the middleware.
+Register it in the proxy config; the dotted path resolves through `PYTHONPATH`, so it works with the mount described under Deployment:
 
 ```yaml
 guardrails:
