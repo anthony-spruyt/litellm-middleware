@@ -1,2 +1,2 @@
 # renovate: datasource=docker depName=ghcr.io/berriai/litellm-non_root
-image: "ghcr.io/berriai/litellm-non_root:v1.106.6@sha256:6363e53f135dafbf4a68fac25f77aec3f2b99be37665e8c5f623a952637c220b"
+image: "ghcr.io/berriai/litellm-non_root:v1.108.2@sha256:c1e177d3c081bcc752b1be423c59d586ed97236d5f8b6b15e649b6d871e11c65"
