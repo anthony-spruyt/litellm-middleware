@@ -5,6 +5,7 @@ from __future__ import annotations
 import bisect
 import codecs
 import copy
+import dataclasses
 import hashlib
 import hmac
 import inspect
@@ -95,22 +96,23 @@ _GEMINI_OPAQUE_PART_KEYS = frozenset(
 _GEMINI_SYSTEM_KEYS = ("systemInstruction", "system_instruction")
 _GEMINI_FIELDS = ("contents", *_GEMINI_SYSTEM_KEYS, "config")
 _MASKED_FIELDS = {
-    "anthropic_messages": ("system", "messages"),
-    "acompletion": ("messages",),
-    "completion": ("messages",),
-    "aresponses": ("instructions", "input"),
-    "responses": ("instructions", "input"),
-    "acompact_responses": ("instructions", "input"),
+    "anthropic_messages": ("system", "messages", "context_management"),
+    "acompletion": ("messages", "context_management"),
+    "completion": ("messages", "context_management"),
+    "aresponses": ("instructions", "input", "context_management"),
+    "responses": ("instructions", "input", "context_management"),
+    "acompact_responses": ("instructions", "input", "context_management"),
     "atext_completion": ("prompt",),
     "text_completion": ("prompt",),
     "agenerate_content": _GEMINI_FIELDS,
     "agenerate_content_stream": _GEMINI_FIELDS,
     "_aresponses_websocket": ("first_message",),
 }
+_WS_FRAME_FIELDS = frozenset({"instructions", "input", "context_management", "response"})
 # LiteLLM runs no post-call hook for websocket replies, so there is nothing to release the call state.
 _NO_REPLY_HOOKS = frozenset({"_aresponses_websocket"})
 _TOKEN_COUNT_FIELDS = frozenset({"messages", "contents", "tools", "system"})
-# LiteLLM 1.106.4's parameters; a function with any other signature gets no provider token counts.
+_JSON_SCALARS = (str, int, float, bool, type(None))
 _TOKEN_COUNT_PARAMETERS = frozenset(
     {
         "provider_counter",
@@ -127,6 +129,8 @@ _TOKEN_COUNT_PARAMETERS = frozenset(
         "output_format",
     }
 )
+# Parameter sets of the supported LiteLLM releases; a function with any other signature gets no provider token counts.
+_TOKEN_COUNT_PARAMETER_SETS = frozenset({_TOKEN_COUNT_PARAMETERS, _TOKEN_COUNT_PARAMETERS | {"context_management"}})
 _CATCH_ALL_KINDS = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 _STREAM_DELTA_FIELDS = {"text_delta": "text", "input_json_delta": "partial_json"}
 # Responses API: delta event -> (done event, field on the done event holding the full text).
@@ -290,10 +294,14 @@ class SecretMaskingMiddleware:
 
     def mask_token_count(self, kwargs: dict) -> dict:
         state = _CallState()
-        return {
-            k: _map_strings(v, lambda text: self._mask_text(text, state)) if k in _TOKEN_COUNT_FIELDS else v
-            for k, v in kwargs.items()
-        }
+
+        def mask(text: str) -> str:
+            return self._mask_text(text, state)
+
+        masked = {k: _map_strings(v, mask) if k in _TOKEN_COUNT_FIELDS else v for k, v in kwargs.items()}
+        if masked.get("context_management") is not None:
+            masked["context_management"] = _map_count_context_management(masked["context_management"], mask)
+        return masked
 
     def wants_stream(self, request_data: dict) -> bool:
         try:
@@ -559,6 +567,30 @@ def _map_dict(value: dict, fn: Callable[[Any, Any], Any]) -> dict:
     return out if any(out[k] is not value[k] for k in value) else value
 
 
+def _map_count_context_management(value: Any, fn: Callable[[str], str]) -> Any:
+    """Rebuilds LiteLLM's frozen CountContextManagement with fn applied to every string in its fields."""
+    names = [field.name for field in dataclasses.fields(value)]
+    if "spec" not in names:
+        raise TypeError("context_management has no spec")
+    fields = {name: getattr(value, name) for name in names}
+    for field_value in fields.values():
+        _require_json(field_value)
+    return dataclasses.replace(value, **{name: _map_strings(v, fn) for name, v in fields.items()})
+
+
+def _require_json(value: Any) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _require_json(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("non-string key")
+            _require_json(item)
+    elif not isinstance(value, _JSON_SCALARS):
+        raise TypeError(type(value).__name__)
+
+
 def _map_gemini_content(value: Any, fn: Callable[[str], str]) -> Any:
     if isinstance(value, list):
         out = [_map_gemini_content(item, fn) for item in value]
@@ -596,7 +628,7 @@ def _mask_json_frame(frame: Any, fn: Callable[[str], str]) -> Any:
         return frame
     if not isinstance(event, dict):
         return frame
-    out = {k: _map_strings(v, fn) if k in ("instructions", "input", "response") else v for k, v in event.items()}
+    out = {k: _map_strings(v, fn) if k in _WS_FRAME_FIELDS else v for k, v in event.items()}
     return json.dumps(out) if any(out[k] is not event[k] for k in event) else frame
 
 
@@ -1082,14 +1114,16 @@ def _known_token_count_signature(function: Any) -> inspect.Signature | None:
         return None
     if any(p.kind in _CATCH_ALL_KINDS for p in signature.parameters.values()):
         return None
-    return signature if signature.parameters.keys() == _TOKEN_COUNT_PARAMETERS else None
+    return signature if frozenset(signature.parameters) in _TOKEN_COUNT_PARAMETER_SETS else None
 
 
 def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_server: Any) -> None:
     """Masks the body /v1/messages/count_tokens and friends send to the provider; they skip every proxy hook."""
     original = getattr(proxy_server, "_try_provider_token_count", None)
     if original is None:
-        _log_warning("secret masking: LiteLLM has no _try_provider_token_count; provider token count calls go unmasked")
+        _log_warning(
+            "secret masking: LiteLLM has no _try_provider_token_count; provider token count masking is not installed"
+        )
         return
     if getattr(original, "_secret_masking", False):
         return

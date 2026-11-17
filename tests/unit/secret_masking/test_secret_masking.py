@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import importlib
 import inspect
 import json
@@ -6,6 +7,7 @@ import sys
 import time
 import types
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -456,6 +458,77 @@ async def test_masks_text_completion_prompt(mw, call_type, prompt):
     out = await mw.async_pre_call_hook(None, None, data, call_type)
 
     assert GH_PAT not in json.dumps(out)
+
+
+def _context_management(instructions):
+    return {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+            },
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+                "instructions": f"Summarise the work on {instructions} so far.",
+            },
+        ]
+    }
+
+
+def _compaction_context_management(instructions):
+    return [{"type": "compaction", "compact_threshold": 200000, "instructions": f"Summarise {instructions}."}]
+
+
+_CONTEXT_MANAGEMENT_SHAPES = [
+    pytest.param(_context_management, id="edits"),
+    pytest.param(_compaction_context_management, id="compaction_list"),
+]
+
+
+@pytest.mark.parametrize("shape", _CONTEXT_MANAGEMENT_SHAPES)
+@pytest.mark.parametrize(
+    ("call_type", "prompt_field"),
+    [
+        ("anthropic_messages", "messages"),
+        ("acompletion", "messages"),
+        ("completion", "messages"),
+        ("aresponses", "input"),
+        ("responses", "input"),
+        ("acompact_responses", "input"),
+    ],
+)
+async def test_masks_context_management_with_the_fake_used_in_the_prompt(mw, call_type, prompt_field, shape):
+    data = {
+        "litellm_call_id": "call-1",
+        prompt_field: [{"role": "user", "content": f"key {GH_PAT}"}],
+        "context_management": shape(GH_PAT),
+    }
+
+    out = await mw.async_pre_call_hook(None, None, data, call_type)
+
+    fake = out[prompt_field][0]["content"].removeprefix("key ")
+    assert fake != GH_PAT
+    assert out["context_management"] == shape(fake)
+
+
+@pytest.mark.parametrize("shape", _CONTEXT_MANAGEMENT_SHAPES)
+async def test_masks_context_management_in_the_websocket_first_frame(mw, shape):
+    frame = {
+        "type": "response.create",
+        "model": "gpt-x",
+        "input": [{"role": "user", "content": f"key {GH_PAT}"}],
+        "context_management": shape(GH_PAT),
+    }
+    data = {"litellm_call_id": "call-1", "first_message": json.dumps(frame)}
+
+    out = await mw.async_pre_call_hook(None, None, data, "_aresponses_websocket")
+
+    masked = json.loads(out["first_message"])
+    fake = masked["input"][0]["content"].removeprefix("key ")
+    assert fake != GH_PAT
+    assert masked["context_management"] == shape(fake)
 
 
 async def test_does_not_touch_thinking_or_base64_blocks(mw):
@@ -1748,6 +1821,35 @@ def _proxy_server_with_counter(result="count"):
     return proxy_server
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class CountContextManagement:
+    spec: Any
+    drop_invalid_edits: bool
+
+
+def _proxy_server_with_context_management_counter():
+    proxy_server = _proxy_server_with_counter()
+    record = proxy_server._try_provider_token_count
+    signature = inspect.signature(record)
+    signature = signature.replace(
+        parameters=[
+            *signature.parameters.values(),
+            inspect.Parameter("context_management", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+        ]
+    )
+
+    async def _try_provider_token_count(*args, **kwargs):
+        arguments = signature.bind(*args, **kwargs).arguments
+        context_management = arguments.pop("context_management", None)
+        result = await record(**arguments)
+        proxy_server.sent[-1]["context_management"] = context_management
+        return result
+
+    _try_provider_token_count.__signature__ = signature
+    proxy_server._try_provider_token_count = _try_provider_token_count
+    return proxy_server
+
+
 def _token_count_request(**overrides):
     return {
         "messages": [{"role": "user", "content": [{"type": "text", "text": GH_PAT}]}],
@@ -1965,6 +2067,79 @@ async def test_provider_token_count_with_the_known_signature_installs_without_a_
         await proxy_server._try_provider_token_count(None, "anthropic", "m", None, **_token_count_request()) == "count"
     )
     _assert_masked(proxy_server.sent[0])
+
+
+@pytest.mark.parametrize("extra", [{}, {"context_management": None}], ids=["omitted", "none"])
+async def test_provider_token_count_with_the_context_management_signature_masks_without_it(
+    mw, mod, fake_litellm, extra
+):
+    proxy_server = _proxy_server_with_context_management_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(), **extra
+    )
+
+    assert _signature_warnings(fake_litellm) == []
+    assert result == "count"
+    _assert_masked(proxy_server.sent[0])
+    assert proxy_server.sent[0]["context_management"] is None
+
+
+@pytest.mark.parametrize("drop_invalid_edits", [True, False])
+async def test_provider_token_count_masks_context_management(mw, mod, drop_invalid_edits):
+    proxy_server = _proxy_server_with_context_management_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+    context_management = CountContextManagement(_context_management(GH_PAT), drop_invalid_edits)
+
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(), context_management=context_management
+    )
+
+    assert result == "count"
+    sent = proxy_server.sent[0]
+    _assert_masked(sent)
+    fake = sent["messages"][0]["content"][0]["text"]
+    assert sent["context_management"] == CountContextManagement(_context_management(fake), drop_invalid_edits)
+
+
+@dataclasses.dataclass(frozen=True)
+class _EditsOnly:
+    edits: Any
+    drop_invalid_edits: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class _WithExtraField:
+    spec: Any
+    drop_invalid_edits: bool
+    extra: Any
+
+
+@pytest.mark.parametrize(
+    "context_management",
+    [
+        pytest.param(_context_management(GH_PAT), id="not_a_dataclass"),
+        pytest.param(_EditsOnly(_context_management(GH_PAT)["edits"], True), id="missing_spec"),
+        pytest.param(
+            CountContextManagement({"edits": tuple(_context_management(GH_PAT)["edits"])}, True), id="unwalkable_value"
+        ),
+        pytest.param(CountContextManagement({"edits": [], GH_PAT.encode(): True}, True), id="non_string_key"),
+        pytest.param(_WithExtraField(_context_management(GH_PAT), True, (GH_PAT,)), id="unwalkable_extra_field"),
+    ],
+)
+async def test_provider_token_count_counts_locally_when_context_management_has_an_unknown_shape(
+    mw, mod, context_management
+):
+    proxy_server = _proxy_server_with_context_management_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(), context_management=context_management
+    )
+
+    assert result is None
+    assert proxy_server.sent == []
 
 
 async def test_google_stream_flushes_into_candidate_with_null_content(mw):
