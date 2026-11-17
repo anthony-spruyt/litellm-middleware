@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.3](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.7.2...v1.7.3) (2026-11-17)
+
+
+### Bug Fixes
+
+* **secret-masking:** mask context management content and accept the LiteLLM 1.108 token counter ([#168](https://github.com/anthony-spruyt/litellm-middleware/issues/168)) ([8842800](https://github.com/anthony-spruyt/litellm-middleware/commit/884280057d91b8b2dc0aad18fdf1046125320a04)), closes [#165](https://github.com/anthony-spruyt/litellm-middleware/issues/165)
+
 ## [1.7.2](https://github.com/anthony-spruyt/litellm-middleware/compare/v1.7.1...v1.7.2) (2026-10-26)
 
 
