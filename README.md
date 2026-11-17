@@ -143,8 +143,8 @@ It swaps fakes in the reply back to the real values, including streamed text and
 - Only prefixed formats are caught. Bare high-entropy strings (hashes, UUIDs, unprefixed passwords) pass through so commit SHAs and similar values aren't mangled.
 - Thinking and reasoning blocks, base64 sources, `data:` URLs, `input_audio` and remote image/file URLs are never touched.
 - The fake-to-real map is kept per virtual key for an hour, so a fake the model echoes from an earlier turn is still swapped back. Each pod keeps its own map in memory (capped at 2000 fakes).
-- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly the parameters of LiteLLM 1.106.4's (`_TOKEN_COUNT_PARAMETERS`) and no `*args` or `**kwargs`.
-- Any other signature logs one warning at startup, and the wrapper returns `None`, so LiteLLM counts locally and no content goes to the provider. A LiteLLM bump that changes the parameters needs that set updated, with any new content parameter masked.
+- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly one of the known parameter sets (`_TOKEN_COUNT_PARAMETER_SETS`) and no `*args` or `**kwargs`. Strings inside its `context_management` argument are masked too.
+- Any other signature logs one warning at startup, and the wrapper returns `None`, so LiteLLM counts locally and no content goes to the provider. A LiteLLM bump that changes the parameters needs a new set added, with any new content parameter masked.
 - `shared_fakes.py` shares the map through Redis/Valkey (needs `HSETEX`, Valkey 9+) when both `REDIS_HOST` and `LITELLM_SALT_KEY` are set (`REDIS_PORT`, `REDIS_USERNAME` and `REDIS_PASSWORD` are optional). Entries are AES-GCM encrypted with a key derived from `LITELLM_SALT_KEY`. Sharing is best effort: if the store is unreachable, the pod restores from its own memory.
 
 ## Tool guard
