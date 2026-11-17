@@ -99,15 +99,16 @@ _MASKED_FIELDS = {
     "anthropic_messages": ("system", "messages", "context_management"),
     "acompletion": ("messages", "context_management"),
     "completion": ("messages", "context_management"),
-    "aresponses": ("instructions", "input"),
-    "responses": ("instructions", "input"),
-    "acompact_responses": ("instructions", "input"),
+    "aresponses": ("instructions", "input", "context_management"),
+    "responses": ("instructions", "input", "context_management"),
+    "acompact_responses": ("instructions", "input", "context_management"),
     "atext_completion": ("prompt",),
     "text_completion": ("prompt",),
     "agenerate_content": _GEMINI_FIELDS,
     "agenerate_content_stream": _GEMINI_FIELDS,
     "_aresponses_websocket": ("first_message",),
 }
+_WS_FRAME_FIELDS = frozenset({"instructions", "input", "context_management", "response"})
 # LiteLLM runs no post-call hook for websocket replies, so there is nothing to release the call state.
 _NO_REPLY_HOOKS = frozenset({"_aresponses_websocket"})
 _TOKEN_COUNT_FIELDS = frozenset({"messages", "contents", "tools", "system"})
@@ -627,7 +628,7 @@ def _mask_json_frame(frame: Any, fn: Callable[[str], str]) -> Any:
         return frame
     if not isinstance(event, dict):
         return frame
-    out = {k: _map_strings(v, fn) if k in ("instructions", "input", "response") else v for k, v in event.items()}
+    out = {k: _map_strings(v, fn) if k in _WS_FRAME_FIELDS else v for k, v in event.items()}
     return json.dumps(out) if any(out[k] is not event[k] for k in event) else frame
 
 
@@ -1120,7 +1121,9 @@ def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_serve
     """Masks the body /v1/messages/count_tokens and friends send to the provider; they skip every proxy hook."""
     original = getattr(proxy_server, "_try_provider_token_count", None)
     if original is None:
-        _log_warning("secret masking: LiteLLM has no _try_provider_token_count; provider token count calls go unmasked")
+        _log_warning(
+            "secret masking: LiteLLM has no _try_provider_token_count; provider token count masking is not installed"
+        )
         return
     if getattr(original, "_secret_masking", False):
         return
