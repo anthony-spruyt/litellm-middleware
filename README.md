@@ -45,7 +45,7 @@ uv run ruff check . && uv run ruff format --check .
 - **Unit** tests run each middleware against a stubbed `litellm`. They are fast, but they can't catch LiteLLM renaming a hook or changing its signature or call order.
 - **Integration** tests need a container runtime. They build the `Dockerfile`, unpack the image's files, and mount them read-only into the pinned LiteLLM image at the same path and with the same `PYTHONPATH` as production. A fake upstream (Anthropic and OpenAI formats) and a fake tool-guard scanner run in the same container.
   Each test sends a real request and checks what reached the upstream and what came back.
-- CI runs both suites on Python 3.13, the LiteLLM image's interpreter (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
+- CI runs both suites on the LiteLLM image's Python version (`.python-version`), through repo-operator's shared `_build-image.yaml`, then builds the image. The GitHub runner's Docker serves the integration suite.
 - `test_package_image.py` asserts that the image holds exactly the package sources and that LiteLLM imports the callback from the mount.
 - `LITELLM_IT_RUNNER` overrides the `docker run --rm` prefix. `LITELLM_IT_CLI` overrides the CLI used for `build`, `exec` and `rm`, and it must share the runner's container store. Set `LITELLM_IT_SHOW_LOGS=1` to print the proxy log.
 - The test proxy only sets the `general_settings` keys the tests depend on (`include_call_id_in_error_body`, `store_prompts_in_spend_logs`, a short spend-log write interval).
@@ -143,8 +143,8 @@ It swaps fakes in the reply back to the real values, including streamed text and
 - Only prefixed formats are caught. Bare high-entropy strings (hashes, UUIDs, unprefixed passwords) pass through so commit SHAs and similar values aren't mangled.
 - Thinking and reasoning blocks, base64 sources, `data:` URLs, `input_audio` and remote image/file URLs are never touched.
 - The fake-to-real map is kept per virtual key for an hour, so a fake the model echoes from an earlier turn is still swapped back. Each pod keeps its own map in memory (capped at 2000 fakes).
-- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly the parameters of LiteLLM 1.106.4's (`_TOKEN_COUNT_PARAMETERS`) and no `*args` or `**kwargs`.
-- Any other signature logs one warning at startup, and the wrapper returns `None`, so LiteLLM counts locally and no content goes to the provider. A LiteLLM bump that changes the parameters needs that set updated, with any new content parameter masked.
+- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly one of the known parameter sets (`_TOKEN_COUNT_PARAMETER_SETS`) and no `*args` or `**kwargs`. Strings inside its `context_management` argument are masked too.
+- Any other signature logs one warning at startup, and the wrapper returns `None`, so LiteLLM counts locally and no content goes to the provider. A LiteLLM bump that changes the parameters needs a new set added, with any new content parameter masked.
 - `shared_fakes.py` shares the map through Redis/Valkey (needs `HSETEX`, Valkey 9+) when both `REDIS_HOST` and `LITELLM_SALT_KEY` are set (`REDIS_PORT`, `REDIS_USERNAME` and `REDIS_PASSWORD` are optional). Entries are AES-GCM encrypted with a key derived from `LITELLM_SALT_KEY`. Sharing is best effort: if the store is unreachable, the pod restores from its own memory.
 
 ## Tool guard
