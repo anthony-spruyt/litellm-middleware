@@ -92,7 +92,8 @@ asyncio.run(ps._try_provider_token_count(
     Counter(), "anthropic", "m", None, contents=None,
     deployment=None, request_model="m", messages=[{"role": "user", "content": sys.argv[1]}],
     system=sys.argv[1], tools=None))
-print(json.dumps(seen))
+# LiteLLM defaults chat_params to a mappingproxy, which json can't serialise
+print(json.dumps(seen, default=dict))
 """
 
 

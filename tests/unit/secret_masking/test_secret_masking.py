@@ -6,7 +6,8 @@ import json
 import sys
 import time
 import types
-from types import SimpleNamespace
+from collections.abc import Mapping
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1827,27 +1828,38 @@ class CountContextManagement:
     drop_invalid_edits: bool
 
 
-def _proxy_server_with_context_management_counter():
+def _proxy_server_with_counter_parameters(**defaults):
     proxy_server = _proxy_server_with_counter()
     record = proxy_server._try_provider_token_count
     signature = inspect.signature(record)
     signature = signature.replace(
         parameters=[
             *signature.parameters.values(),
-            inspect.Parameter("context_management", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+            *(
+                inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD, default=default)
+                for name, default in defaults.items()
+            ),
         ]
     )
 
     async def _try_provider_token_count(*args, **kwargs):
         arguments = signature.bind(*args, **kwargs).arguments
-        context_management = arguments.pop("context_management", None)
+        extra = {name: arguments.pop(name, default) for name, default in defaults.items()}
         result = await record(**arguments)
-        proxy_server.sent[-1]["context_management"] = context_management
+        proxy_server.sent[-1].update(extra)
         return result
 
     _try_provider_token_count.__signature__ = signature
     proxy_server._try_provider_token_count = _try_provider_token_count
     return proxy_server
+
+
+def _proxy_server_with_context_management_counter():
+    return _proxy_server_with_counter_parameters(context_management=None)
+
+
+def _proxy_server_with_chat_params_counter():
+    return _proxy_server_with_counter_parameters(context_management=None, chat_params=MappingProxyType({}))
 
 
 def _token_count_request(**overrides):
@@ -2136,6 +2148,83 @@ async def test_provider_token_count_counts_locally_when_context_management_has_a
 
     result = await proxy_server._try_provider_token_count(
         None, "anthropic", "m", None, **_token_count_request(), context_management=context_management
+    )
+
+    assert result is None
+    assert proxy_server.sent == []
+
+
+def _chat_params(text):
+    return {
+        "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        "parallel_tool_calls": False,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "description": f"An answer about {text}.",
+                    "properties": {"count": {"type": "integer", "minimum": 0}},
+                },
+            },
+        },
+        "reasoning_effort": "high",
+        "drop_params": True,
+    }
+
+
+@pytest.mark.parametrize("extra", [{}, {"chat_params": MappingProxyType({})}], ids=["omitted", "empty"])
+async def test_provider_token_count_with_the_chat_params_signature_masks_without_it(mw, mod, fake_litellm, extra):
+    proxy_server = _proxy_server_with_chat_params_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(), **extra
+    )
+
+    assert _signature_warnings(fake_litellm) == []
+    assert result == "count"
+    _assert_masked(proxy_server.sent[0])
+    assert proxy_server.sent[0]["chat_params"] == {}
+
+
+@pytest.mark.parametrize("container", [dict, MappingProxyType])
+async def test_provider_token_count_masks_chat_params(mw, mod, container):
+    proxy_server = _proxy_server_with_chat_params_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(), chat_params=container(_chat_params(GH_PAT))
+    )
+
+    assert result == "count"
+    sent = proxy_server.sent[0]
+    _assert_masked(sent)
+    fake = sent["messages"][0]["content"][0]["text"]
+    assert isinstance(sent["chat_params"], Mapping)
+    assert sent["chat_params"] == _chat_params(fake)
+
+
+@pytest.mark.parametrize(
+    "chat_params",
+    [
+        pytest.param([_chat_params(GH_PAT)], id="not_a_mapping"),
+        pytest.param({**_chat_params(GH_PAT), "tool_choice": (GH_PAT,)}, id="unwalkable_value"),
+        pytest.param({**_chat_params(GH_PAT), GH_PAT.encode(): True}, id="non_string_key"),
+        pytest.param(
+            {**_chat_params(GH_PAT), "response_format": MappingProxyType(_chat_params(GH_PAT)["response_format"])},
+            id="unwalkable_nested_mapping",
+        ),
+    ],
+)
+async def test_provider_token_count_counts_locally_when_chat_params_has_an_unknown_shape(mw, mod, chat_params):
+    proxy_server = _proxy_server_with_chat_params_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    result = await proxy_server._try_provider_token_count(
+        None, "anthropic", "m", None, **_token_count_request(), chat_params=chat_params
     )
 
     assert result is None

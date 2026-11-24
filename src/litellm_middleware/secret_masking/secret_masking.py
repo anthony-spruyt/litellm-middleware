@@ -16,7 +16,7 @@ import string
 import sys
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..pipeline import MiddlewarePipeline
@@ -130,7 +130,13 @@ _TOKEN_COUNT_PARAMETERS = frozenset(
     }
 )
 # Parameter sets of the supported LiteLLM releases; a function with any other signature gets no provider token counts.
-_TOKEN_COUNT_PARAMETER_SETS = frozenset({_TOKEN_COUNT_PARAMETERS, _TOKEN_COUNT_PARAMETERS | {"context_management"}})
+_TOKEN_COUNT_PARAMETER_SETS = frozenset(
+    {
+        _TOKEN_COUNT_PARAMETERS,
+        _TOKEN_COUNT_PARAMETERS | {"context_management"},
+        _TOKEN_COUNT_PARAMETERS | {"context_management", "chat_params"},
+    }
+)
 _CATCH_ALL_KINDS = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 _STREAM_DELTA_FIELDS = {"text_delta": "text", "input_json_delta": "partial_json"}
 # Responses API: delta event -> (done event, field on the done event holding the full text).
@@ -301,6 +307,8 @@ class SecretMaskingMiddleware:
         masked = {k: _map_strings(v, mask) if k in _TOKEN_COUNT_FIELDS else v for k, v in kwargs.items()}
         if masked.get("context_management") is not None:
             masked["context_management"] = _map_count_context_management(masked["context_management"], mask)
+        if masked.get("chat_params") is not None:
+            masked["chat_params"] = _map_chat_params(masked["chat_params"], mask)
         return masked
 
     def wants_stream(self, request_data: dict) -> bool:
@@ -576,6 +584,15 @@ def _map_count_context_management(value: Any, fn: Callable[[str], str]) -> Any:
     for field_value in fields.values():
         _require_json(field_value)
     return dataclasses.replace(value, **{name: _map_strings(v, fn) for name, v in fields.items()})
+
+
+def _map_chat_params(value: Any, fn: Callable[[str], str]) -> dict:
+    """Applies fn to every string in LiteLLM's chat_params, a mapping of JSON values."""
+    if not isinstance(value, Mapping):
+        raise TypeError(type(value).__name__)
+    params = dict(value)
+    _require_json(params)
+    return _map_strings(params, fn)
 
 
 def _require_json(value: Any) -> None:
