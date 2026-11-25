@@ -52,6 +52,8 @@ uv run ruff check . && uv run ruff format --check .
   It has a Postgres container, started and stopped by the fixture from the pinned `postgres-image.yaml` image (a ghcr image, since CI egress allows only ghcr), so tests can read spend logs and the Guardrails Monitor endpoints. It has no Redis or other network.
   A test-only `custom_auth` (`fake_auth.py`, mode `auto`) gives one key an alias; every other key goes through LiteLLM's own database auth.
 - `/v1/messages/count_tokens` goes to the fake upstream, and its test asserts the reply's `litellm_count_source` is `provider`. A second test calls the wrapped `_try_provider_token_count` inside the container.
+  `/v1/responses/input_tokens` tests assert that no real secret reaches the fake upstream, including one in the `text.format` schema of a bridged Anthropic request.
+  They also assert that an OpenAI model's count is a `local_estimate` that never reaches it when LiteLLM has `_try_native_responses_count`.
 
 ## Deployment
 
@@ -89,7 +91,7 @@ CI builds and publishes the image with outbound network limited to GitHub, Sigst
 
 ## LiteLLM version coupling
 
-The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden_params`, and `proxy_server._try_provider_token_count`. These change between LiteLLM releases without notice.
+The middleware hooks into LiteLLM internals: hook names and signatures, `_hidden_params`, `proxy_server._try_provider_token_count` and `proxy_server._try_native_responses_count`. These change between LiteLLM releases without notice.
 
 `litellm-image.yaml` pins the LiteLLM image (tag and digest) the integration tests run against. Renovate tracks it through its `# renovate:` annotation, so a LiteLLM bump PR here runs the integration suite against the new version.
 
@@ -133,7 +135,7 @@ LiteLLM attaches the client's `Authorization` header to the request before routi
 
 ## Secret masking
 
-`secret_masking/` masks `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/responses/compact`, `/v1/completions`, Gemini `generateContent`/`streamGenerateContent`, and the body that `count_tokens`/`input_tokens` forward to the provider.
+`secret_masking/` masks `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/responses/compact`, `/v1/completions`, Gemini `generateContent`/`streamGenerateContent`, and the body that token counting forwards to the provider.
 
 It swaps credentials with a known prefix (GitHub, Google, Anthropic, OpenAI, AWS, Cloudflare, Context7, SendGrid, Shopify, DigitalOcean, Perplexity, Postman, Linear, Notion, LiteLLM `sk-`, `sl_`, PEM private keys and the others in `_PATTERNS`) for a fake with the same prefix, length and character classes.
 
@@ -143,8 +145,9 @@ It swaps fakes in the reply back to the real values, including streamed text and
 - Only prefixed formats are caught. Bare high-entropy strings (hashes, UUIDs, unprefixed passwords) pass through so commit SHAs and similar values aren't mangled.
 - Thinking and reasoning blocks, base64 sources, `data:` URLs, `input_audio` and remote image/file URLs are never touched.
 - The fake-to-real map is kept per virtual key for an hour, so a fake the model echoes from an earlier turn is still swapped back. Each pod keeps its own map in memory (capped at 2000 fakes).
-- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly one of the known parameter sets (`_TOKEN_COUNT_PARAMETER_SETS`) and no `*args` or `**kwargs`. Strings inside its `context_management` argument are masked too.
+- Provider token counts are masked by wrapping `proxy_server._try_provider_token_count`, which installs only when the function has exactly one of the known parameter sets (`_TOKEN_COUNT_PARAMETER_SETS`) and no `*args` or `**kwargs`. Strings inside its `context_management` and `chat_params` arguments are masked too.
 - Any other signature logs one warning at startup, and the wrapper returns `None`, so LiteLLM counts locally and no content goes to the provider. A LiteLLM bump that changes the parameters needs a new set added, with any new content parameter masked.
+- OpenAI Responses input-token counts are estimated locally: `proxy_server._try_native_responses_count` is replaced with a function that returns `None`, so LiteLLM counts without calling the provider. A function with a signature other than `_NATIVE_RESPONSES_COUNT_PARAMETER_SETS` is replaced too, with one warning at startup. A LiteLLM without the function is left alone.
 - `shared_fakes.py` shares the map through Redis/Valkey (needs `HSETEX`, Valkey 9+) when both `REDIS_HOST` and `LITELLM_SALT_KEY` are set (`REDIS_PORT`, `REDIS_USERNAME` and `REDIS_PASSWORD` are optional). Entries are AES-GCM encrypted with a key derived from `LITELLM_SALT_KEY`. Sharing is best effort: if the store is unreachable, the pod restores from its own memory.
 
 ## Tool guard
