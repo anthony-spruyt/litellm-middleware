@@ -28,3 +28,6 @@ https://json\.schemastore\.org/.*
 
 # Trivy docs site fails the TLS handshake (unrecognized name) intermittently
 https://trivy\.dev/.*
+
+# The GitHub Actions OIDC issuer is an identifier for cosign, not a page: it returns 404
+https://token\.actions\.githubusercontent\.com/.*

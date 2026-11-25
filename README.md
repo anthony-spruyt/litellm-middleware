@@ -24,7 +24,6 @@ tests/
   unit/                        mirrors the package; litellm is stubbed
   integration/                 boots the real LiteLLM image
 litellm-image.yaml             the pinned LiteLLM image
-cosign/litellm.pub             the key CI verifies that image's signature with
 postgres-image.yaml            the pinned Postgres image for the integration tests
 Dockerfile                     package-only image
 ```
@@ -102,13 +101,12 @@ It sits at the repo root because Renovate's `config:recommended` ignores `**/tes
 
 ## Image signature
 
-The `verify-litellm-image` job in `.github/workflows/ci-repo.yaml` runs `cosign verify --key cosign/litellm.pub` on the `image` in `litellm-image.yaml`. It runs on every CI run, and if it fails, `repo` fails and the `image` job, which starts the pinned image for the integration tests, is skipped.
+The `verify-litellm-image` job in `.github/workflows/ci-repo.yaml` runs `cosign verify` on the `image` in `litellm-image.yaml`. It runs on every CI run, and if it fails, `repo` fails and the `image` job, which starts the pinned image for the integration tests, is skipped.
 
-- `cosign/litellm.pub` is the key LiteLLM signs its release images with: [`cosign.pub` in BerriAI/litellm at `e82a3c64`](https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub). Its sha256 is `e3fe3e08c44b16407fe0b37c43b4f8b603b3a0f4ee74c29e647bc022d762c2c0`.
-- An image signed with a different key fails the check, so a key change goes through a PR.
-- To rotate it, open one PR that replaces `cosign/litellm.pub` with the `cosign.pub` pinned at the upstream commit holding the new key (commit SHA in the URL) and bumps `litellm-image.yaml` to an image signed with it, because the job checks the image pinned in the same PR.
-- Upstream publishes no sha256 for the key: check the commit against the "Verify Docker Image Signatures" section of upstream's README on `main`, then update the sha256 above to the new file's.
-- spruyt-labs' Kyverno policy `verify-litellm-image` holds the same key inline, so rotate it there too: add the new key as a second attestor first, and drop the old one once the cluster runs an image signed with the new key.
+- LiteLLM signs its release images keyless, so there is no signing key to pin. The job checks that the signing certificate's identity is exactly `https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main`, issued by `https://token.actions.githubusercontent.com`. Upstream documents both under [Release Signing](https://github.com/BerriAI/litellm/blob/main/.github/SECURITY.md#release-signing).
+- The identity is matched exactly, not by pattern, so only an image signed by that workflow on that ref passes.
+- If upstream moves its release workflow, the job fails on the next LiteLLM bump PR. Confirm the new identity against upstream's Release Signing section, then change it in `ci-repo.yaml` in that PR, because the job checks the image pinned in the same PR.
+- spruyt-labs' Kyverno policy `verify-litellm-image` verifies the image signature at admission in the cluster, so change it in step with this job.
 
 ## Rate-limit headers
 

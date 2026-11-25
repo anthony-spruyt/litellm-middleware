@@ -38,4 +38,7 @@ jobs:
             echo "::error file=litellm-image.yaml::image must be ghcr.io/berriai/litellm-non_root:<tag>@sha256:<digest>"
             exit 1
           fi
-          cosign verify --key cosign/litellm.pub "$image"
+          cosign verify \
+            --certificate-identity "https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$image"
