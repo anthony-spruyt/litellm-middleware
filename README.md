@@ -103,7 +103,7 @@ It sits at the repo root because Renovate's `config:recommended` ignores `**/tes
 
 The `verify-litellm-image` job in `.github/workflows/ci-repo.yaml` runs `cosign verify` on the `image` in `litellm-image.yaml`. It runs on every CI run, and if it fails, `repo` fails and the `image` job, which starts the pinned image for the integration tests, is skipped.
 
-- LiteLLM signs its release images keyless, so there is no signing key to pin. The job checks that the signing certificate's identity is exactly `https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main`, issued by `https://token.actions.githubusercontent.com`. Upstream documents both under [Release Signing](https://github.com/BerriAI/litellm/blob/main/.github/SECURITY.md#release-signing).
+- LiteLLM signs its release images keyless, so there is no signing key to pin. The job checks that the signing certificate's identity is exactly `https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main`, issued by `https://token.actions.githubusercontent.com`, for a run in `BerriAI/project-releaser`. Upstream documents both under [Release Signing](https://github.com/BerriAI/litellm/blob/main/.github/SECURITY.md#release-signing).
 - The identity is matched exactly, not by pattern, so only an image signed by that workflow on that ref passes.
 - If upstream moves its release workflow, the job fails on the next LiteLLM bump PR. Confirm the new identity against upstream's Release Signing section, then change it in `ci-repo.yaml` in that PR, because the job checks the image pinned in the same PR.
 - spruyt-labs' Kyverno policy `verify-litellm-image` verifies the image signature at admission in the cluster, so change it in step with this job.
