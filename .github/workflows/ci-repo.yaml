@@ -41,4 +41,5 @@ jobs:
           cosign verify \
             --certificate-identity "https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-github-workflow-repository "BerriAI/project-releaser" \
             "$image"
