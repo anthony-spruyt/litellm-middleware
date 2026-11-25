@@ -3,7 +3,7 @@ import secrets
 import string
 
 import pytest
-from conftest import MASTER_KEY, MCP_SERVER, MODEL
+from conftest import MASTER_KEY, MCP_SERVER, MODEL, OPENAI_MODEL
 
 
 def _github_token() -> str:
@@ -128,6 +128,74 @@ def test_count_tokens_endpoint_counts_at_the_provider_with_secrets_masked(proxy)
     assert received, "the provider was never asked to count"
     sent = json.dumps(received)
     assert token not in sent, "real secret reached the provider"
+    assert "ghp_" in sent, "fake should keep the recognisable prefix"
+
+
+def _responses_received(proxy) -> list[dict]:
+    return [r["body"] for r in proxy.upstream_received() if r["path"].startswith("/v1/responses")]
+
+
+def _count_openai_responses_input(proxy, token: str):
+    return proxy.client.post(
+        "/v1/responses/input_tokens", json={"model": OPENAI_MODEL, "input": f"my token is {token} ok"}
+    )
+
+
+def _litellm_has_native_responses_count(proxy) -> bool:
+    probe = "import litellm.proxy.proxy_server as ps; print(hasattr(ps, '_try_native_responses_count'))"
+    return proxy.python(probe).splitlines()[-1] == "True"
+
+
+def test_openai_responses_input_tokens_never_send_a_secret_to_the_provider(proxy):
+    token = _github_token()
+    before = len(_responses_received(proxy))
+
+    resp = _count_openai_responses_input(proxy, token)
+
+    assert resp.status_code == 200, resp.text
+    assert token not in json.dumps(_responses_received(proxy)[before:]), "real secret reached the provider"
+
+
+def test_openai_responses_input_tokens_are_estimated_locally(proxy):
+    if not _litellm_has_native_responses_count(proxy):
+        pytest.skip("this LiteLLM counts OpenAI Responses through the provider counter, which masks")
+    before = len(_responses_received(proxy))
+
+    resp = _count_openai_responses_input(proxy, _github_token())
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["litellm_count_source"] == "local_estimate", resp.text
+    assert resp.json()["input_tokens"] > 0, resp.text
+    assert len(_responses_received(proxy)) == before, "the provider was asked to count"
+
+
+def test_bridged_responses_input_tokens_count_at_the_provider_with_secrets_masked(proxy):
+    input_token, schema_token = _github_token(), _github_token()
+    before = len(_count_tokens_received(proxy))
+    schema = {
+        "type": "object",
+        "description": f"An answer about {schema_token}.",
+        "properties": {"label": {"type": "string", "enum": [schema_token]}},
+        "required": ["label"],
+        "additionalProperties": False,
+    }
+
+    resp = proxy.client.post(
+        "/v1/responses/input_tokens",
+        json={
+            "model": MODEL,
+            "input": f"my token is {input_token} ok",
+            "text": {"format": {"type": "json_schema", "name": "answer", "strict": True, "schema": schema}},
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["litellm_count_source"] == "provider", resp.text
+    received = _count_tokens_received(proxy)[before:]
+    assert received, "the provider was never asked to count"
+    sent = json.dumps(received)
+    assert input_token not in sent, "real secret reached the provider"
+    assert schema_token not in sent, "real secret in text.format reached the provider"
     assert "ghp_" in sent, "fake should keep the recognisable prefix"
 
 

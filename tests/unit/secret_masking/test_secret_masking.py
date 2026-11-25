@@ -2166,7 +2166,10 @@ def _chat_params(text):
                 "schema": {
                     "type": "object",
                     "description": f"An answer about {text}.",
-                    "properties": {"count": {"type": "integer", "minimum": 0}},
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 0},
+                        "label": {"type": "string", "enum": [text]},
+                    },
                 },
             },
         },
@@ -2210,7 +2213,7 @@ async def test_provider_token_count_masks_chat_params(mw, mod, container):
 @pytest.mark.parametrize(
     "chat_params",
     [
-        pytest.param([_chat_params(GH_PAT)], id="not_a_mapping"),
+        pytest.param([("reasoning_effort", GH_PAT)], id="not_a_mapping"),
         pytest.param({**_chat_params(GH_PAT), "tool_choice": (GH_PAT,)}, id="unwalkable_value"),
         pytest.param({**_chat_params(GH_PAT), GH_PAT.encode(): True}, id="non_string_key"),
         pytest.param(
@@ -2229,6 +2232,111 @@ async def test_provider_token_count_counts_locally_when_chat_params_has_an_unkno
 
     assert result is None
     assert proxy_server.sent == []
+
+
+_NATIVE_RESPONSES_COUNT_PARAMETERS = (
+    "provider_counter",
+    "custom_llm_provider",
+    "model_to_use",
+    "_region",
+    "responses_request",
+    "policy",
+    "deployment",
+    "request_model",
+)
+
+
+def _proxy_server_with_native_responses_counter(parameters=_NATIVE_RESPONSES_COUNT_PARAMETERS):
+    proxy_server = types.ModuleType("litellm.proxy.proxy_server")
+    proxy_server.sent = []
+
+    async def _try_native_responses_count(*args, **kwargs):
+        proxy_server.sent.append((args, kwargs))
+        return "count"
+
+    _try_native_responses_count.__signature__ = inspect.Signature(_parameters(*parameters))
+    proxy_server._try_native_responses_count = _try_native_responses_count
+    return proxy_server
+
+
+def _native_responses_warnings(fake_litellm):
+    return [w for w in fake_litellm.verbose_proxy_logger.warnings if "_try_native_responses_count" in w[0][0]]
+
+
+async def _count_native_responses(proxy_server):
+    return await proxy_server._try_native_responses_count(
+        None,
+        "openai",
+        "gpt-m",
+        None,
+        responses_request={"input": f"my token is {GH_PAT}"},
+        policy=None,
+        deployment=None,
+        request_model="gpt-m",
+    )
+
+
+async def test_native_responses_count_never_reaches_the_provider(mw, mod, fake_litellm):
+    proxy_server = _proxy_server_with_native_responses_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    assert await _count_native_responses(proxy_server) is None
+    assert proxy_server.sent == []
+    assert _native_responses_warnings(fake_litellm) == []
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        pytest.param((*_NATIVE_RESPONSES_COUNT_PARAMETERS, "prompt"), id="extra_parameter"),
+        pytest.param(_NATIVE_RESPONSES_COUNT_PARAMETERS[:-1], id="missing_parameter"),
+        pytest.param(
+            tuple("request" if n == "responses_request" else n for n in _NATIVE_RESPONSES_COUNT_PARAMETERS),
+            id="renamed_parameter",
+        ),
+    ],
+)
+async def test_native_responses_count_with_an_unknown_signature_is_replaced_with_a_warning(
+    mw, mod, fake_litellm, parameters
+):
+    proxy_server = _proxy_server_with_native_responses_counter(parameters)
+    mod.install_token_count_masking(mw, proxy_server)
+    mod.install_token_count_masking(mw, proxy_server)
+
+    assert await _count_native_responses(proxy_server) is None
+    assert proxy_server.sent == []
+    assert len(_native_responses_warnings(fake_litellm)) == 1
+
+
+async def test_native_responses_count_with_a_catch_all_signature_is_replaced(mw, mod, fake_litellm):
+    proxy_server = _proxy_server_with_native_responses_counter()
+    proxy_server._try_native_responses_count.__signature__ = inspect.Signature(
+        [*_parameters(*_NATIVE_RESPONSES_COUNT_PARAMETERS), inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD)]
+    )
+    mod.install_token_count_masking(mw, proxy_server)
+
+    assert await _count_native_responses(proxy_server) is None
+    assert proxy_server.sent == []
+    assert len(_native_responses_warnings(fake_litellm)) == 1
+
+
+async def test_native_responses_count_is_replaced_when_the_provider_counter_is_missing(mw, mod):
+    proxy_server = _proxy_server_with_native_responses_counter()
+    mod.install_token_count_masking(mw, proxy_server)
+
+    assert not hasattr(proxy_server, "_try_provider_token_count")
+    assert await _count_native_responses(proxy_server) is None
+    assert proxy_server.sent == []
+
+
+def test_a_litellm_without_a_native_responses_count_is_left_alone(mw, mod, fake_litellm):
+    proxy_server = _proxy_server_with_counter()
+    warnings = list(fake_litellm.verbose_proxy_logger.warnings)
+
+    mod.install_token_count_masking(mw, proxy_server)
+
+    assert not hasattr(proxy_server, "_try_native_responses_count")
+    assert fake_litellm.verbose_proxy_logger.warnings == warnings
 
 
 async def test_google_stream_flushes_into_candidate_with_null_content(mw):

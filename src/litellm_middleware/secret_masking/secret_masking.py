@@ -137,6 +137,22 @@ _TOKEN_COUNT_PARAMETER_SETS = frozenset(
         _TOKEN_COUNT_PARAMETERS | {"context_management", "chat_params"},
     }
 )
+_NATIVE_RESPONSES_COUNT_PARAMETER_SETS = frozenset(
+    {
+        frozenset(
+            {
+                "provider_counter",
+                "custom_llm_provider",
+                "model_to_use",
+                "_region",
+                "responses_request",
+                "policy",
+                "deployment",
+                "request_model",
+            }
+        )
+    }
+)
 _CATCH_ALL_KINDS = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 _STREAM_DELTA_FIELDS = {"text_delta": "text", "input_json_delta": "partial_json"}
 # Responses API: delta event -> (done event, field on the done event holding the full text).
@@ -1124,18 +1140,42 @@ def _key_from_env() -> bytes:
     return hmac.new(salt.encode(), b"litellm-secret-masking", hashlib.sha256).digest()
 
 
-def _known_token_count_signature(function: Any) -> inspect.Signature | None:
+def _known_signature(function: Any, parameter_sets: frozenset[frozenset[str]]) -> inspect.Signature | None:
     try:
         signature = inspect.signature(function)
     except (TypeError, ValueError):
         return None
     if any(p.kind in _CATCH_ALL_KINDS for p in signature.parameters.values()):
         return None
-    return signature if frozenset(signature.parameters) in _TOKEN_COUNT_PARAMETER_SETS else None
+    return signature if frozenset(signature.parameters) in parameter_sets else None
+
+
+async def _count_locally(*_args, **_kwargs):  # NOSONAR - LiteLLM awaits the call
+    return None
+
+
+_count_locally._secret_masking = True
+
+
+def _install_local_responses_count(proxy_server: Any) -> None:
+    """Counts OpenAI Responses input tokens locally: None from the native counter makes LiteLLM estimate."""
+    original = getattr(proxy_server, "_try_native_responses_count", None)
+    if original is None or getattr(original, "_secret_masking", False):
+        return
+    if _known_signature(original, _NATIVE_RESPONSES_COUNT_PARAMETER_SETS) is None:
+        _log_warning(
+            "secret masking: _try_native_responses_count has an unrecognised signature; "
+            "it is replaced and OpenAI Responses token counts are estimated locally"
+        )
+    proxy_server._try_native_responses_count = _count_locally
 
 
 def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_server: Any) -> None:
-    """Masks the body /v1/messages/count_tokens and friends send to the provider; they skip every proxy hook."""
+    """Masks the body /v1/messages/count_tokens and friends send to the provider; they skip every proxy hook.
+
+    OpenAI Responses counts never reach the provider: they are estimated locally.
+    """
+    _install_local_responses_count(proxy_server)
     original = getattr(proxy_server, "_try_provider_token_count", None)
     if original is None:
         _log_warning(
@@ -1145,17 +1185,12 @@ def install_token_count_masking(middleware: SecretMaskingMiddleware, proxy_serve
     if getattr(original, "_secret_masking", False):
         return
 
-    signature = _known_token_count_signature(original)
+    signature = _known_signature(original, _TOKEN_COUNT_PARAMETER_SETS)
     if signature is None:
         _log_warning(
             "secret masking: _try_provider_token_count has an unrecognised signature; provider token counts are off"
         )
-
-        async def unavailable(*_args, **_kwargs):  # NOSONAR - LiteLLM awaits the call
-            return None
-
-        unavailable._secret_masking = True
-        proxy_server._try_provider_token_count = unavailable
+        proxy_server._try_provider_token_count = _count_locally
         return
 
     async def masked(*args, **kwargs):
